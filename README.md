@@ -67,9 +67,9 @@ Principales URLs :
 - Ajouter des tests pour toute nouvelle fonctionnalité
 
 ## Licence
-Projet sous licence MIT. Voir [LICENSE](LICENSE).
+Projet sous licence GPL. Voir [LICENSE](LICENSE).
 
 ## Auteurs
-- Développeur principal : [Votre Nom]
-- Encadrant : [Nom de l’encadrant]
-- Institution : [Nom de l’établissement]
+- Développeur principal : [AGBOKA Farid]
+- Encadrant : []
+- Institution : []
