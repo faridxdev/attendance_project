@@ -1,0 +1,225 @@
+{% extends 'attendance/base.html' %}
+{% load static %}
+
+{% block title %}Rapports - Centre de Contrôle{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4" style="background: #0a0b10; min-height: 100vh;">
+    <nav class="navbar navbar-expand-lg glass-panel mb-4 p-3 d-flex justify-content-between align-items-center">
+        <div class="container-fluid">
+            <span class="navbar-brand fw-bold text-uppercase" style="color: #00f3ff; letter-spacing: 1px;">
+                <i class="fas fa-chart-pie me-2"></i> CENTRE DE CONTRÔLE - RAPPORTS
+            </span>
+            <a href="{% url 'attendance:dashboard' %}" class="btn btn-neon btn-sm">
+                <i class="fas fa-arrow-left me-2"></i>Retour au Dashboard
+            </a>
+        </div>
+    </nav>
+
+    <div class="mb-4 d-flex justify-content-center">
+        <div class="btn-group shadow-sm" role="group">
+            <a href="?type=journalier" class="btn btn-neon {% if filters.type == 'journalier' %}active{% endif %}">Journalier</a>
+            <a href="?type=hebdomadaire" class="btn btn-neon {% if filters.type == 'hebdomadaire' %}active{% endif %}">Hebdomadaire</a>
+            <a href="?type=mensuel" class="btn btn-neon {% if filters.type == 'mensuel' %}active{% endif %}">Mensuel</a>
+        </div>
+    </div>
+
+    <div class="glass-panel mb-4 p-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="m-0 text-info small fw-bold"><i class="fas fa-filter me-2"></i>FILTRES AVANCÉS & EXPORTS</h5>
+            {% if filters.date_debut or filters.groupe_id %}
+                <a href="{% url 'attendance:rapports' %}" class="text-danger small decoration-none fw-bold"><i class="fas fa-times-circle"></i> Réinitialiser</a>
+            {% endif %}
+        </div>
+        
+        <form method="get" class="row g-3">
+            {% if filters.type %}
+                <input type="hidden" name="type" value="{{ filters.type }}">
+            {% endif %}
+            
+            <div class="col-md-3">
+                <label class="form-label text-light small opacity-75">Date de début</label>
+                <input type="date" name="date_debut" class="form-control glass-input" value="{{ filters.date_debut }}">
+            </div>
+            
+            <div class="col-md-3">
+                <label class="form-label text-light small opacity-75">Date de fin</label>
+                <input type="date" name="date_fin" class="form-control glass-input" value="{{ filters.date_fin }}">
+            </div>
+            
+            <div class="col-md-3">
+                <label class="form-label text-light small opacity-75">Groupe</label>
+                <select name="groupe" class="form-select glass-select">
+                    <option value="">Tous les groupes</option>
+                    {% for g in groupes %}
+                        <option value="{{ g.id }}" {% if filters.groupe_id == g.id|slugify %}selected{% endif %}>
+                            {{ g.nom }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <div class="col-md-3 d-flex align-items-end">
+                <div class="btn-group w-100 shadow-sm">
+                    <button type="submit" class="btn btn-neon flex-grow-1">
+                        <i class="fas fa-search me-1"></i> Filtrer
+                    </button>
+                    <button type="submit" name="export" value="csv" class="btn btn-neon-purple" title="Exporter CSV">
+                        <i class="fas fa-file-csv"></i>
+                    </button>
+                    <button type="submit" name="export" value="pdf" class="btn btn-neon-red" title="Télécharger PDF">
+                        <i class="fas fa-file-pdf"></i>
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="glass-panel stat-card border-top-primary">
+                <h6 class="stat-title">Enregistrements totaux</h6>
+                <h2 class="stat-number">{{ stats.total|default:"0" }}</h2>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="glass-panel stat-card border-top-success">
+                <h6 class="stat-title">Présences Confirmées</h6>
+                <h2 class="stat-number text-success">{{ stats.presents|default:"0" }}</h2>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="glass-panel stat-card border-top-danger">
+                <h6 class="stat-title">Absences relevées</h6>
+                <h2 class="stat-number text-danger">{{ stats.absents|default:"0" }}</h2>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="glass-panel stat-card border-top-info">
+                <h6 class="stat-title">Taux de Présence</h6>
+                <h2 class="stat-number text-info">{{ stats.taux|default:"0" }}%</h2>
+            </div>
+        </div>
+    </div>
+
+    <div class="glass-panel p-0 overflow-hidden">
+        <div class="table-responsive">
+            <table class="custom-table w-100">
+                <thead>
+                    <tr style="background: rgba(255,255,255,0.05);">
+                        <th class="ps-4 text-info small">DATE</th>
+                        <th class="text-info small">HEURE</th>
+                        <th class="text-info small">MATRICULE</th>
+                        <th class="text-info small">ÉTUDIANT</th>
+                        <th class="text-info small">FILIÈRE & ANNÉE</th>
+                        <th class="text-info small">GROUPE</th>
+                        <th class="text-center text-info small">STATUT</th>
+                    </tr>
+                </thead>
+                <tbody class="text-light">
+                    {% for p in presences %}
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                        <td class="ps-4 fw-bold">{{ p.date|date:"d/m/Y" }}</td>
+                        <td class="opacity-75">{{ p.heure|time:"H:i" }}</td>
+                        <td><code class="text-info bg-dark px-2 py-1 rounded">{{ p.etudiant.matricule }}</code></td>
+                        <td>{{ p.etudiant.nom }} {{ p.etudiant.prenom }}</td>
+                        <td>
+                            <span class="badge bg-secondary opacity-75">
+                                {{ p.annee.filiere.nom }} (A{{ p.annee.numero }})
+                            </span>
+                        </td>
+                        <td>
+                            {% if p.groupe %}
+                                {{ p.groupe.nom }}
+                            {% else %}
+                                <span class="opacity-50 small italic">Aucun</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-center">
+                            {% if p.statut|lower == 'présent' or p.statut|lower == 'present' %}
+                                <span class="badge-glow badge-success">Présent</span>
+                            {% else %}
+                                <span class="badge-glow badge-danger">Absent</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center py-5">
+                            <i class="fas fa-folder-open fa-3x text-muted mb-3 d-block"></i>
+                            <span class="text-muted">Aucune donnée trouvée.</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Global Glass Effect */
+    .glass-panel {
+        background: rgba(255, 255, 255, 0.03) !important;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 15px;
+    }
+
+    /* Style des cartes statistiques corrigé */
+    .stat-card {
+        padding: 1.5rem;
+        text-align: center;
+        transition: transform 0.3s ease;
+        border-top: 3px solid transparent !important;
+    }
+    .stat-card:hover { transform: translateY(-5px); }
+
+    .stat-title {
+        color: rgba(255, 255, 255, 0.8) !important; /* Texte clair pour être lisible */
+        font-size: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+
+    .stat-number {
+        font-weight: 800;
+        font-size: 2rem;
+        margin: 0;
+        text-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Bordures colorées sur le dessus */
+    .border-top-primary { border-top-color: #0d6efd !important; }
+    .border-top-success { border-top-color: #2ecc71 !important; }
+    .border-top-danger { border-top-color: #e74c3c !important; }
+    .border-top-info { border-top-color: #00f3ff !important; }
+
+    /* Badges & Buttons */
+    .badge-glow {
+        padding: 0.4em 1em;
+        border-radius: 50px;
+        font-size: 0.8em;
+        font-weight: bold;
+        letter-spacing: 0.5px;
+    }
+    .badge-success { background: rgba(46, 213, 115, 0.15); color: #2ecc71; border: 1px solid #2ecc71; }
+    .badge-danger { background: rgba(231, 76, 60, 0.15); color: #e74c3c; border: 1px solid #e74c3c; }
+
+    .glass-input, .glass-select {
+        background: rgba(0, 0, 0, 0.2) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        color: white !important;
+    }
+    
+    .btn-neon-purple { background: #9b59b6; color: white; border: none; }
+    .btn-neon-red { background: #e74c3c; color: white; border: none; }
+
+    /* Tableau */
+    .custom-table th { border: none; }
+    .custom-table td { vertical-align: middle; }
+    .text-info { color: #00f3ff !important; }
+</style>
+{% endblock %}

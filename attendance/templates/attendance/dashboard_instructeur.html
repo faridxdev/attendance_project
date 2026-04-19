@@ -1,0 +1,212 @@
+{% extends 'attendance/base.html' %}
+
+{% block title %}Tableau de bord - Instructeur{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4" style="background: #0a0b10; min-height: 100vh;">
+    <nav class="navbar navbar-expand-lg glass-panel mb-4 p-3">
+        <div class="container-fluid">
+            <span class="navbar-brand fw-bold text-info"><i class="fas fa-eye me-2"></i>POSTE INSTRUCTEUR</span>
+            <div class="ms-auto d-flex align-items-center">
+                <span class="me-3 text-light opacity-75 small">{{ user.nom }} {{ user.prenom }}</span>
+                <a href="{% url 'attendance:logout' %}" class="btn btn-neon-red btn-sm">Déconnexion</a>
+            </div>
+        </div>
+    </nav>
+
+    <h4 class="mb-4 text-muted small tracking-widest text-uppercase">SESSION DU {{ today|date:"d/m/Y" }}</h4>
+
+    <div class="glass-panel p-3 mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="m-0 text-info fw-bold"><i class="fas fa-book me-2"></i>MATIÈRES ENSEIGNÉES</h6>
+            {% if matieres|length > 3 %}
+            <button class="btn btn-link btn-sm text-info p-0 text-decoration-none shadow-none" type="button" data-bs-toggle="collapse" data-bs-target="#moreMatieres" aria-expanded="false" id="toggleMatieres">
+                VOIR TOUT <i class="fas fa-chevron-down ms-1"></i>
+            </button>
+            {% endif %}
+        </div>
+
+        {% if matieres %}
+        <div class="row g-2">
+            {% for matiere in matieres|slice:":3" %}
+            <div class="col-md-6 col-lg-4">
+                <div class="matiere-card d-flex justify-content-between align-items-center">
+                    <div>
+                        <span class="matiere-code">{{ matiere.code }}</span>
+                        <p class="matiere-name mb-0">{{ matiere.nom }}</p>
+                        <small class="text-muted" style="font-size: 0.7rem;">
+                            A{{ matiere.annee.numero }} • {% for f in matiere.filieres.all %}{{ f.nom }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                        </small>
+                    </div>
+                    <button class="btn btn-sm btn-outline-info p-1 px-2" onclick="filterByMatiere('{{ matiere.id }}')" title="Filtrer">
+                        <i class="fas fa-filter" style="font-size: 0.8rem;"></i>
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="collapse" id="moreMatieres">
+            <div class="row g-2 mt-2">
+                {% for matiere in matieres|slice:"3:" %}
+                <div class="col-md-6 col-lg-4">
+                    <div class="matiere-card d-flex justify-content-between align-items-center">
+                        <div>
+                            <span class="matiere-code">{{ matiere.code }}</span>
+                            <p class="matiere-name mb-0">{{ matiere.nom }}</p>
+                            <small class="text-muted" style="font-size: 0.7rem;">A{{ matiere.annee.numero }}</small>
+                        </div>
+                        <button class="btn btn-sm btn-outline-info p-1 px-2" onclick="filterByMatiere('{{ matiere.id }}')">
+                            <i class="fas fa-filter"></i>
+                        </button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% else %}
+            <p class="text-muted text-center py-3 small">Aucune matière assignée.</p>
+        {% endif %}
+    </div>
+
+    <div class="glass-panel p-4 text-center mb-4">
+        <form style="display:none">{% csrf_token %}</form>
+        <div class="mb-3">
+            <label for="matiereSelect" class="form-label text-light small opacity-75">Sélectionnez la matière pour le pointage :</label>
+            <select id="matiereSelect" class="form-select glass-select">
+                <option value="">-- Choisir une matière --</option>
+                {% for matiere in matieres %}
+                <option value="{{ matiere.id }}">{{ matiere.nom }} (A{{ matiere.annee.numero }})</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button id="startBtn" class="btn btn-neon btn-lg px-5 mx-2" disabled><i class="fas fa-play me-2"></i>ACTIVER SCAN</button>
+        <button id="stopBtn" class="btn btn-neon-red btn-lg px-5 mx-2" disabled><i class="fas fa-stop me-2"></i>STOPPER SCAN</button>
+        <p id="statusMsg" class="mt-3 fw-bold text-muted">ÉTAT DU SYSTÈME : <span class="text-danger">VEILLE</span></p>
+    </div>
+
+    <div class="video-section glass-panel p-3 text-center mb-5">
+        <h4>Flux webcam en direct</h4>
+        <div class="position-relative d-inline-block">
+            <img id="videoStream" src="{% url 'attendance:video_feed' %}" width="640" height="480" class="img-fluid rounded border border-info">
+            <div id="overlayText" class="position-absolute top-50 start-50 translate-middle text-white fw-bold fs-3 bg-dark bg-opacity-50 p-3 rounded d-none">
+                En attente...
+            </div>
+        </div>
+        <p class="mt-3 text-info small"><i class="fas fa-crosshairs me-2"></i>Ciblez le visage pour identification</p>
+    </div>
+
+    <h4 class="mb-3">LOGS D'ACTIVITÉ{% if matiere_filtre %} - FILTRÉ{% endif %}</h4>
+    <div class="table-responsive glass-panel p-2">
+        <table class="custom-table">
+            <thead>
+                <tr>
+                    <th>Matricule</th>
+                    <th>Étudiant</th>
+                    <th>Matière</th>
+                    <th>Filière</th>
+                    <th>Heure</th>
+                    <th>Statut</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for presence in presences %}
+                <tr>
+                    <td>{{ presence.etudiant.matricule }}</td>
+                    <td>{{ presence.etudiant.nom }} {{ presence.etudiant.prenom }}</td>
+                    <td>{{ presence.matiere.nom }}</td>
+                    <td>{{ presence.filiere.nom }}</td>
+                    <td>{{ presence.heure|time:"H:i" }}</td>
+                    <td>
+                        {% if presence.statut == 'présent' or presence.statut == 'present' %}
+                            <span class="badge-glow badge-success">PRÉSENT</span>
+                        {% else %}
+                            <span class="badge-glow badge-danger">ABSENT</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" class="text-center py-3">Aucune donnée détectée.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="glass-panel mt-4 p-3 text-center">
+        <h5 class="m-0">TOTAL PRÉSENTS : <span class="text-info">{{ presents_count }}</span></h5>
+    </div>
+</div>
+
+<style>
+    /* Matières Cards Compactes */
+    .matiere-card {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(0, 243, 255, 0.1);
+        border-radius: 8px;
+        padding: 8px 12px;
+        transition: 0.3s;
+    }
+    .text-muted {
+        color: rgba(255, 255, 255, 0.8) !important; /* Texte clair pour être lisible */
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+    .matiere-card:hover { border-color: #00f3ff; background: rgba(0, 243, 255, 0.05); }
+    .matiere-code { color: #00f3ff; font-weight: 800; font-size: 0.7rem; display: block; }
+    .matiere-name { color: #fff; font-size: 1rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+    
+    .glass-select { background: rgba(0,0,0,0.3) !important; color: white !important; border: 1px solid rgba(255,255,255,0.1) !important; }
+    #overlayText { font-family: 'Orbitron', sans-serif; pointer-events: none; }
+</style>
+
+<script>
+// Gestion du bouton Voir tout
+const toggleBtn = document.getElementById('toggleMatieres');
+const moreDiv = document.getElementById('moreMatieres');
+if(toggleBtn) {
+    moreDiv.addEventListener('show.bs.collapse', () => toggleBtn.innerHTML = 'RÉDUIRE <i class="fas fa-chevron-up ms-1"></i>');
+    moreDiv.addEventListener('hide.bs.collapse', () => toggleBtn.innerHTML = 'VOIR TOUT <i class="fas fa-chevron-down ms-1"></i>');
+}
+
+// Logique de Scan
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const statusMsg = document.getElementById('statusMsg');
+const stream = document.getElementById('videoStream');
+const overlay = document.getElementById('overlayText');
+const matiereSelect = document.getElementById('matiereSelect');
+
+matiereSelect.addEventListener('change', function() { startBtn.disabled = !this.value; });
+
+async function togglePointage(action) {
+    const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    const matiereId = matiereSelect.value;
+    const url = action === 'start' ? "{% url 'attendance:start_pointage' %}" : "{% url 'attendance:stop_pointage' %}";
+
+    const response = await fetch(url, { 
+        method: 'POST',
+        headers: {'X-CSRFToken': csrftoken, 'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `matiere_id=${matiereId}`
+    });
+    
+    if (response.ok) {
+        const data = await response.json();
+        const actif = (action === 'start');
+        startBtn.disabled = actif;
+        stopBtn.disabled = !actif;
+        overlay.classList.toggle('d-none', !actif);
+        statusMsg.innerHTML = `ÉTAT DU SYSTÈME : <span class="${actif ? 'text-success' : 'text-danger'} fw-bold">${actif ? 'ACTIF' : 'VEILLE'}</span>`;
+        stream.src = "{% url 'attendance:video_feed' %}?" + new Date().getTime();
+    }
+}
+
+startBtn.onclick = () => togglePointage('start');
+stopBtn.onclick = () => togglePointage('stop');
+function filterByMatiere(id) { window.location.href = "?matiere=" + id; }
+</script>
+{% endblock %}

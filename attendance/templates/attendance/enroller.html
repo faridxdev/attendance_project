@@ -1,0 +1,125 @@
+{% extends 'attendance/base.html' %}
+
+{% block title %}Enrôlement d'un étudiant{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2><i class="fas fa-fingerprint me-2"></i>NOUVEL ENRÔLEMENT</h2>
+        <a href="{% url 'attendance:dashboard' %}" class="btn btn-neon-red btn-sm">Annuler</a>
+    </div>
+
+    <div class="glass-panel p-4">
+        <form id="enrolForm" method="POST" enctype="multipart/form-data">
+            {% csrf_token %}
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label text-info">Matricule</label>
+                        <input type="text" name="matricule" class="form-control glass-input" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-info">Nom</label>
+                        <input type="text" name="nom" class="form-control glass-input" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-info">Prénom</label>
+                        <input type="text" name="prenom" class="form-control glass-input" required>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label text-info">Date de naissance</label>
+                        <input type="date" name="date_naissance" class="form-control glass-input" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-info">Filière</label>
+                        <select name="filiere" class="form-select glass-select" required>
+                            <option value="">-- Sélectionner --</option>
+                            {% for f in filieres %}
+                                <option value="{{ f.id }}">{{ f.nom }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-info">Année</label>
+                        <select name="annee" class="form-select glass-select" required>
+                            <option value="">-- Sélectionner --</option>
+                            {% for a in annees %}
+                                <option value="{{ a.id }}">{{ a.filiere.nom }} - Année {{ a.numero }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-info">Groupe (optionnel)</label>
+                        <select name="groupe" class="form-select glass-select">
+                            <option value="">-- Aucun --</option>
+                            {% for g in groupes %}
+                                <option value="{{ g.id }}">{{ g.nom }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-4 mt-4 text-center">
+                <label class="form-label text-neon-blue mb-3">CAPTURE BIOMÉTRIQUE</label>
+                <div class="d-flex justify-content-center">
+                    <div class="position-relative">
+                        <video id="video" width="640" height="480" autoplay class="border border-info rounded"></video>
+                        <canvas id="canvas" style="display:none;"></canvas>
+                    </div>
+                </div>
+                <button type="button" id="captureBtn" class="btn btn-neon mt-3"><i class="fas fa-camera me-2"></i>CAPTURER VISAGE</button>
+                <input type="hidden" name="photo" id="photoData">
+            </div>
+
+            <button type="submit" class="btn btn-neon-purple w-100 py-3 fw-bold">VALIDER L'ENREGISTREMENT</button>
+        </form>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const captureBtn = document.getElementById('captureBtn');
+    const photoInput = document.getElementById('photoData');
+
+    navigator.mediaDevices.getUserMedia({ video: true })
+        .then(stream => video.srcObject = stream);
+
+    captureBtn.onclick = () => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        photoInput.value = canvas.toDataURL('image/jpeg');
+        alert('Photo capturée ! Vous pouvez maintenant enregistrer.');
+    };
+
+    // Option : envoi via JS (si tu préfères AJAX)
+    document.getElementById('enrolForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData();
+        // Append text fields
+        for (const pair of new FormData(form).entries()){
+            if(pair[0] !== 'photo') formData.append(pair[0], pair[1]);
+        }
+        // Convert dataURL to Blob and append as file
+        if(photoInput.value){
+            const res = await fetch(photoInput.value);
+            const blob = await res.blob();
+            formData.append('photo', blob, 'capture.jpg');
+        }
+
+        const response = await fetch("{% url 'attendance:capture' %}", {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+        alert(data.success ? data.message : data.error);
+    };
+</script>
+{% endblock %}

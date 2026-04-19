@@ -1,0 +1,166 @@
+/* CSS spécifique pour l'admin Django - Thème futuriste adapté */
+/* Import des variables de couleur */
+@import url('futuristic.css');
+
+/* Styles de base pour l'admin */
+body {
+    background-color: var(--bg-dark) !important;
+    color: var(--text-main) !important;
+    font-family: 'Rajdhani', sans-serif !important;
+}
+
+.navbar, .main-sidebar, .content-wrapper {
+    background-color: var(--bg-dark) !important;
+    border-color: var(--glass-border) !important;
+}
+
+.navbar-brand, .sidebar-brand {
+    color: var(--neon-blue) !important;
+    font-family: 'Orbitron', sans-serif !important;
+}
+
+.nav-link, .sidebar a {
+    color: var(--text-main) !important;
+}
+
+.nav-link:hover, .sidebar a:hover {
+    color: var(--neon-blue) !important;
+    background-color: rgba(0, 243, 255, 0.1) !important;
+}
+
+.btn-primary {
+    background-color: var(--neon-blue) !important;
+    border-color: var(--neon-blue) !important;
+}
+
+.btn-primary:hover {
+    background-color: var(--neon-purple) !important;
+    border-color: var(--neon-purple) !important;
+}
+
+.card {
+    background-color: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+}
+
+.card-header {
+    background-color: rgba(0, 243, 255, 0.1) !important;
+    border-bottom: 1px solid var(--glass-border) !important;
+    color: var(--text-main) !important;
+}
+
+.table {
+    background-color: var(--glass-bg) !important;
+    color: var(--text-main) !important;
+}
+
+.table thead th {
+    background-color: rgba(188, 19, 254, 0.1) !important;
+    border-color: var(--glass-border) !important;
+    color: var(--neon-purple) !important;
+}
+
+.table tbody tr {
+    border-color: var(--glass-border) !important;
+}
+
+.table tbody tr:hover {
+    background-color: rgba(0, 243, 255, 0.05) !important;
+}
+
+.form-control, .form-select, select, textarea, input[type="text"], input[type="password"], input[type="email"] {
+    background-color: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    color: var(--text-main) !important;
+}
+
+select option {
+    background-color: var(--bg-dark) !important;
+    color: var(--text-main) !important;
+}
+
+.form-control:focus, .form-select:focus, select:focus, textarea:focus, input:focus {
+    border-color: var(--neon-blue) !important;
+    box-shadow: 0 0 0 0.2rem rgba(0, 243, 255, 0.25) !important;
+}
+
+.text-muted {
+    color: var(--text-muted) !important;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    color: var(--text-main) !important;
+    font-family: 'Orbitron', sans-serif !important;
+}
+
+/* Liens */
+a {
+    color: var(--neon-blue) !important;
+}
+
+a:hover {
+    color: var(--neon-purple) !important;
+}
+
+/* Pagination */
+.page-link {
+    background-color: var(--glass-bg) !important;
+    border-color: var(--glass-border) !important;
+    color: var(--text-main) !important;
+}
+
+.page-link:hover {
+    background-color: var(--neon-blue) !important;
+    border-color: var(--neon-blue) !important;
+    color: white !important;
+}
+
+.page-item.active .page-link {
+    background-color: var(--neon-purple) !important;
+    border-color: var(--neon-purple) !important;
+}
+
+/* Breadcrumbs */
+.breadcrumb {
+    background-color: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+}
+
+.breadcrumb-item a {
+    color: var(--neon-blue) !important;
+}
+
+.breadcrumb-item.active {
+    color: var(--text-main) !important;
+}
+
+/* Alerts */
+.alert {
+    background-color: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    color: var(--text-main) !important;
+}
+
+.alert-success {
+    border-color: var(--neon-green) !important;
+}
+
+.alert-danger {
+    border-color: var(--neon-red) !important;
+}
+
+.alert-info {
+    border-color: var(--neon-blue) !important;
+}
+
+/* Badges */
+.badge {
+    background-color: var(--neon-blue) !important;
+}
+
+/* Override pour éviter les conflits */
+.jazzmin-navbar, .jazzmin-sidebar {
+    background: linear-gradient(135deg, var(--bg-dark), rgba(188, 19, 254, 0.1)) !important;
+}
