@@ -88,7 +88,8 @@
     <div class="video-section glass-panel p-3 text-center mb-5">
         <h4>Flux webcam en direct</h4>
         <div class="position-relative d-inline-block">
-            <img id="videoStream" src="{% url 'attendance:video_feed' %}" width="640" height="480" class="img-fluid rounded border border-info">
+            <video id="videoStream" autoplay muted playsinline width="640" height="480" class="img-fluid rounded border border-info"></video>
+            <canvas id="scanCanvas" style="display:none;"></canvas>
             <div id="overlayText" class="position-absolute top-50 start-50 translate-middle text-white fw-bold fs-3 bg-dark bg-opacity-50 p-3 rounded d-none">
                 En attente...
             </div>
@@ -207,6 +208,43 @@ async function togglePointage(action) {
 
 startBtn.onclick = () => togglePointage('start');
 stopBtn.onclick = () => togglePointage('stop');
+
+const mobileCaptureBtn = document.getElementById('mobileCaptureBtn');
+const photoCaptureInput = document.getElementById('photoCaptureInput');
+const mobileStatus = document.getElementById('mobileStatus');
+
+mobileCaptureBtn.onclick = () => {
+    if (!matiereSelect.value) {
+        alert('Veuillez sélectionner une matière avant d’utiliser le pointage mobile.');
+        return;
+    }
+    photoCaptureInput.click();
+};
+
+photoCaptureInput.onchange = async () => {
+    if (!photoCaptureInput.files.length) return;
+    const file = photoCaptureInput.files[0];
+    const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    const formData = new FormData();
+    formData.append('photo', file);
+    formData.append('matiere_id', matiereSelect.value);
+
+    mobileStatus.textContent = 'Envoi du cliché au serveur...';
+
+    const response = await fetch("{% url 'attendance:mobile_pointage' %}", {
+        method: 'POST',
+        headers: {'X-CSRFToken': csrftoken},
+        body: formData
+    });
+
+    const data = await response.json();
+    if (response.ok && data.success) {
+        mobileStatus.textContent = `Statut : ${data.statut.toUpperCase()} - ${data.nom || ''} ${data.prenom || ''} (${data.matricule || ''})`;
+    } else {
+        mobileStatus.textContent = data.error || 'Erreur pendant le pointage mobile.';
+    }
+};
+
 function filterByMatiere(id) { window.location.href = "?matiere=" + id; }
 </script>
 {% endblock %}

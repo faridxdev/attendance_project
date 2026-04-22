@@ -108,6 +108,33 @@ def capture_photo(request):
 
 
 @login_required
+def mobile_pointage_capture(request):
+    if request.method == 'POST' and request.user.role == 'instructeur':
+        matiere_id = request.POST.get('matiere_id')
+        photo_data = request.FILES.get('photo')
+
+        if not matiere_id or not photo_data:
+            return JsonResponse({'error': 'Matière ou photo manquante.'}, status=400)
+
+        try:
+            Matiere.objects.get(id=matiere_id)
+        except Matiere.DoesNotExist:
+            return JsonResponse({'error': 'Matière invalide.'}, status=400)
+
+        image_bytes = photo_data.read()
+        frame_array = np.frombuffer(image_bytes, np.uint8)
+        frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+
+        if frame is None:
+            return JsonResponse({'error': 'Image invalide.'}, status=400)
+
+        statut, nom, prenom, matricule = process_frame(frame.copy(), matiere_id=matiere_id)
+        return JsonResponse({'success': True, 'statut': statut, 'nom': nom, 'prenom': prenom, 'matricule': matricule})
+
+    return JsonResponse({'error': 'Méthode non autorisée'}, status=405)
+
+
+@login_required
 def dashboard_redirect(request):
     """Redirection intelligente selon le rôle de l'utilisateur"""
     role = request.user.role
@@ -470,21 +497,37 @@ frame_queue = queue.Queue(maxsize=1)  # Dernière frame uniquement
 
 class SmartCamera:
     def __init__(self):
-        self.video = cv2.VideoCapture(0)  # Webcam locale (0) ou IP cam pour déploiement
-        if not self.video.isOpened():
-            raise RuntimeError("Impossible d'ouvrir la webcam")
+        self.video = None
+        self.backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_VFW, cv2.CAP_ANY]
+        for backend in self.backends:
+            try:
+                capture = cv2.VideoCapture(0, backend)
+                if capture.isOpened():
+                    self.video = capture
+                    break
+                capture.release()
+            except Exception:
+                continue
+
+        if self.video is None or not self.video.isOpened():
+            raise RuntimeError(
+                "Impossible d'ouvrir la webcam. Vérifiez qu'elle n'est pas utilisée par une autre application ou que le pilote est installé."
+            )
 
         self.video.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.video.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.video.set(cv2.CAP_PROP_FPS, 30)
 
     def __del__(self):
-        if hasattr(self, 'video'):
+        if hasattr(self, 'video') and self.video is not None:
             self.video.release()
 
     def get_frame(self):
+        if self.video is None or not self.video.isOpened():
+            return None
+
         success, frame = self.video.read()
-        if not success:
+        if not success or frame is None:
             return None
 
         # Resize pour fluidité
@@ -527,7 +570,12 @@ def gen(camera):
 def video_feed(request):
     if request.user.role != 'instructeur':
         return HttpResponseForbidden("Accès refusé")
-    return StreamingHttpResponse(gen(SmartCamera()),
+    try:
+        camera = SmartCamera()
+    except RuntimeError as e:
+        return HttpResponse(str(e), status=503)
+
+    return StreamingHttpResponse(gen(camera),
                                  content_type='multipart/x-mixed-replace; boundary=frame')
 
 

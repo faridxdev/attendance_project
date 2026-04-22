@@ -16,6 +16,7 @@ urlpatterns = [
     path('video_feed/', views.video_feed, name='video_feed'),
     path('start_pointage/', views.start_pointage, name='start_pointage'),
     path('stop_pointage/', views.stop_pointage, name='stop_pointage'),
+    path('mobile_pointage/', views.mobile_pointage_capture, name='mobile_pointage'),
 
     # Dashboard unique (redirection) + spécifiques
     path('dashboard/', views.dashboard_redirect, name='dashboard'),
