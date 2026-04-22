@@ -33,14 +33,12 @@ def enroller_view(request):
     return render(request, 'attendance/enroller.html', {
         'filieres': filieres,
         'annees': annees,
-        'groupes': groupes
+        'groupes': groupes,
+        'auto_matricule': True
     })
 
-@csrf_exempt  # À sécuriser plus tard avec token CSRF + JS
 def capture_photo(request):
     if request.method == 'POST':
-        # Récupérer les données du formulaire
-        matricule = request.POST.get('matricule')
         nom = request.POST.get('nom')
         prenom = request.POST.get('prenom')
         date_naissance = request.POST.get('date_naissance')
@@ -48,34 +46,32 @@ def capture_photo(request):
         annee_id = request.POST.get('annee')
         groupe_id = request.POST.get('groupe')
 
+        # Vérifier si déjà inscrit cette année/filière
+        deja = Etudiant.objects.filter(nom=nom, prenom=prenom, date_naissance=date_naissance, filiere=filiere, annee=annee).first()
+        if deja:
+            return JsonResponse({'error': 'Cet étudiant est déjà enrôlé pour cette année/filière. Utilisez la mise à jour.'}, status=400)
+
         # Récupérer l'image envoyée en base64 ou fichier
         photo_data = request.FILES.get('photo')
         if not photo_data:
             return JsonResponse({'error': 'Aucune photo'}, status=400)
 
-        # Sauvegarde temporaire
         temp_path = f"media/temp_{matricule}.jpg"
         with open(temp_path, 'wb') as f:
             for chunk in photo_data.chunks():
                 f.write(chunk)
 
-        # Nouvelle fonction d'embedding (mise à jour)
-        embedding = generate_embedding_from_file(temp_path)
+        try:
+            embedding = generate_embedding_from_file(temp_path)
+        except Exception:
+            os.remove(temp_path)
+            return JsonResponse({'error': 'Aucun visage détecté'}, status=400)
         if embedding is None:
             os.remove(temp_path)
             return JsonResponse({'error': 'Visage non détecté'}, status=400)
 
-        # Création étudiant
-        try:
-            filiere = Filiere.objects.get(id=filiere_id)
-            annee = Annee.objects.get(id=annee_id)
-            groupe = Groupe.objects.get(id=groupe_id) if groupe_id else None
-        except (Filiere.DoesNotExist, Annee.DoesNotExist):
-            os.remove(temp_path)
-            return JsonResponse({'error': 'Filière ou année invalide'}, status=400)
-
+        groupe = Groupe.objects.get(id=groupe_id) if groupe_id else None
         etudiant = Etudiant.objects.create(
-            matricule=matricule,
             nom=nom,
             prenom=prenom,
             date_naissance=date_naissance,
@@ -84,9 +80,8 @@ def capture_photo(request):
             groupe=groupe,
         )
         etudiant.save_embedding(embedding)
-
         os.remove(temp_path)
-        return JsonResponse({'success': True, 'message': 'Étudiant enregistré'})
+        return JsonResponse({'success': True, 'message': f'Étudiant enregistré avec matricule {matricule}'})
 
     return JsonResponse({'error': 'Méthode non autorisée'}, status=405)
 

@@ -2,6 +2,8 @@ from django.db import models
 from cryptography.fernet import Fernet
 import os
 import numpy as np
+import re
+import unicodedata
 
 # ==================== NOUVELLES TABLES ====================
 
@@ -117,45 +119,48 @@ class Matiere(models.Model):
 # ==================== TABLES RÉNOVÉES ====================
 
 class Etudiant(models.Model):
-    """Modèle pour les étudiants (ancien Eleve)"""
     matricule = models.CharField(max_length=20, unique=True)
     nom = models.CharField(max_length=100)
     prenom = models.CharField(max_length=100)
     email = models.EmailField(blank=True)
     date_naissance = models.DateField()
-    
-    # Relations
+
     filiere = models.ForeignKey(Filiere, on_delete=models.CASCADE, related_name='etudiants')
     annee = models.ForeignKey(Annee, on_delete=models.CASCADE, related_name='etudiants')
-    groupe = models.ForeignKey(Groupe, on_delete=models.SET_NULL, null=True, blank=True, 
-                              related_name='etudiants')  # Optionnel si pas de groupe
-    
-    # Données biométriques
+    groupe = models.ForeignKey(Groupe, on_delete=models.SET_NULL, null=True, blank=True)
+
     photo = models.ImageField(upload_to='etudiants_photos/', blank=True)
-    embedding = models.BinaryField(null=True, blank=True)  # Facial embedding chiffré
-    
-    # Métadonnées
+    embedding = models.BinaryField(null=True, blank=True)
+
     date_inscription = models.DateField(auto_now_add=True)
     actif = models.BooleanField(default=True)
 
-    class Meta:
-        ordering = ['nom', 'prenom']
-        unique_together = ['matricule']
+    def generate_matricule(self):
+        # enlever accents
+        def clean(text):
+            return unicodedata.normalize('NFD', text).encode('ascii', 'ignore').decode('utf-8')
 
-    def save_embedding(self, raw_embedding: np.ndarray):
-        """Sauvegarde l'embedding facial chiffré"""
-        key = os.getenv('ENCRYPTION_KEY').encode()
-        f = Fernet(key)
-        self.embedding = f.encrypt(raw_embedding.tobytes())
-        self.save()
+        code_filiere = clean(self.filiere.code.upper())[:4]
+        annee_code = str(self.annee.numero)
 
-    def get_embedding(self):
-        """Récupère l'embedding facial déchiffré"""
-        if not self.embedding:
-            return None
-        key = os.getenv('ENCRYPTION_KEY').encode()
-        f = Fernet(key)
-        return np.frombuffer(f.decrypt(self.embedding), dtype=np.float32)
+        prefix = f"{code_filiere}{annee_code}"
+
+        last = Etudiant.objects.filter(
+            matricule__startswith=prefix
+        ).order_by('-matricule').first()
+
+        if last:
+            match = re.search(r'-(\d+)$', last.matricule)
+            number = int(match.group(1)) + 1 if match else 1
+        else:
+            number = 1
+
+        return f"{prefix}-{str(number).zfill(3)}"
+
+    def save(self, *args, **kwargs):
+        if not self.matricule:
+            self.matricule = self.generate_matricule()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.matricule} - {self.nom} {self.prenom}"
