@@ -4,6 +4,10 @@ import os
 import numpy as np
 import re
 import unicodedata
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 # ==================== NOUVELLES TABLES ====================
 
@@ -129,7 +133,7 @@ class Etudiant(models.Model):
     annee = models.ForeignKey(Annee, on_delete=models.CASCADE, related_name='etudiants')
     groupe = models.ForeignKey(Groupe, on_delete=models.SET_NULL, null=True, blank=True)
 
-    photo = models.ImageField(upload_to='etudiants_photos/', blank=True)
+    photo = models.ImageField(upload_to='etudiants/%Y/%m/', blank=True, null=True)
     embedding = models.BinaryField(null=True, blank=True)
 
     date_inscription = models.DateField(auto_now_add=True)
@@ -160,7 +164,16 @@ class Etudiant(models.Model):
     def save(self, *args, **kwargs):
         if not self.matricule:
             self.matricule = self.generate_matricule()
+
         super().save(*args, **kwargs)
+
+        if self.photo:
+            try:
+                img = Image.open(self.photo.path)
+                img = img.convert('RGB')
+                img.save(self.photo.path, optimize=True, quality=70)
+            except Exception:
+                pass
 
     def __str__(self):
         return f"{self.matricule} - {self.nom} {self.prenom}"

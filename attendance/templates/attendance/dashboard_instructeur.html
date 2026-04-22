@@ -115,7 +115,7 @@
                     <td>{{ presence.etudiant.matricule }}</td>
                     <td>{{ presence.etudiant.nom }} {{ presence.etudiant.prenom }}</td>
                     <td>{{ presence.matiere.nom }}</td>
-                    <td>{{ presence.filiere.nom }}</td>
+                    <td>{{ presence.annee.filiere.nom }}</td>
                     <td>{{ presence.heure|time:"H:i" }}</td>
                     <td>
                         {% if presence.statut == 'présent' or presence.statut == 'present' %}

@@ -8,7 +8,7 @@ import os
 def process_frame(frame: np.ndarray, matiere_id=None) -> tuple:
     """
     Traite une frame du flux : détection + reconnaissance + marquage présence
-    Retourne : (statut, nom, matricule) ou (None, None, None)
+    Retourne : (statut, nom, prenom, matricule) ou (None, None, None, None)
     """
     try:
         # Sauvegarde temporaire de la frame
@@ -45,7 +45,6 @@ def process_frame(frame: np.ndarray, matiere_id=None) -> tuple:
                     
                     presence, created = Presence.objects.get_or_create(
                         etudiant=etudiant,
-                        filiere=etudiant.filiere,
                         annee=etudiant.annee,
                         groupe=etudiant.groupe,
                         matiere=matiere,
@@ -56,13 +55,13 @@ def process_frame(frame: np.ndarray, matiere_id=None) -> tuple:
                         presence.statut = 'présent'
                         presence.heure = timezone.now().time()
                         presence.save()
-                    return 'présent', etudiant.nom, etudiant.matricule
+                    return 'présent', etudiant.nom, etudiant.prenom, etudiant.matricule
                 except Etudiant.DoesNotExist:
-                    return 'inconnu', None, None
-        return 'absent', None, None
+                    return 'inconnu', None, None, None
+        return 'absent', None, None, None
     except Exception as e:
         print(f"Erreur reconnaissance : {e}")
-        return 'erreur', None, None
+        return 'erreur', None, None, None
     
 def generate_embedding_from_file(image_path):
     try:

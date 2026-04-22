@@ -64,6 +64,10 @@ class GroupeAdmin(admin.ModelAdmin):
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == 'instructeur':
             kwargs['queryset'] = Utilisateur.objects.filter(role='instructeur')
+        elif db_field.name == 'annee':
+            # Filtrer les années par filière si une filière est sélectionnée (mais Groupe n'a pas filiere direct)
+            # Pour Groupe, annee détermine filiere
+            pass
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
@@ -127,6 +131,23 @@ class EtudiantAdmin(admin.ModelAdmin):
     )
     readonly_fields = ['embedding']
 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == 'annee':
+            # Filtrer les années par filière si une filière est sélectionnée
+            filiere_id = request.POST.get('filiere') if request.method == 'POST' else None
+            if filiere_id:
+                kwargs['queryset'] = Annee.objects.filter(filiere_id=filiere_id)
+            else:
+                kwargs['queryset'] = Annee.objects.all()
+        elif db_field.name == 'groupe':
+            # Filtrer les groupes par année si une année est sélectionnée
+            annee_id = request.POST.get('annee') if request.method == 'POST' else None
+            if annee_id:
+                kwargs['queryset'] = Groupe.objects.filter(annee_id=annee_id)
+            else:
+                kwargs['queryset'] = Groupe.objects.all()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
 
 @admin.register(Presence)
 class PresenceAdmin(admin.ModelAdmin):
@@ -148,6 +169,31 @@ class PresenceAdmin(admin.ModelAdmin):
             'fields': ('reconnu_par',)
         }),
     )
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == 'annee':
+            etudiant_id = request.POST.get('etudiant') if request.method == 'POST' else None
+            if etudiant_id:
+                try:
+                    etudiant = Etudiant.objects.get(id=etudiant_id)
+                    kwargs['queryset'] = Annee.objects.filter(filiere=etudiant.filiere)
+                except Etudiant.DoesNotExist:
+                    kwargs['queryset'] = Annee.objects.all()
+            else:
+                kwargs['queryset'] = Annee.objects.all()
+        elif db_field.name == 'groupe':
+            annee_id = request.POST.get('annee') if request.method == 'POST' else None
+            if annee_id:
+                kwargs['queryset'] = Groupe.objects.filter(annee_id=annee_id)
+            else:
+                kwargs['queryset'] = Groupe.objects.all()
+        elif db_field.name == 'matiere':
+            annee_id = request.POST.get('annee') if request.method == 'POST' else None
+            if annee_id:
+                kwargs['queryset'] = Matiere.objects.filter(annee_id=annee_id)
+            else:
+                kwargs['queryset'] = Matiere.objects.all()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == 'reconnu_par':

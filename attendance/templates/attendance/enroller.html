@@ -78,21 +78,36 @@ Enrolement d'un etudiant
                     </div>
 
                     <div class="mb-3">
+                        <label class="form-label text-info">Prénom</label>
+                        <input type="text" name="prenom" class="form-control glass-input" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label text-info">Date de naissance</label>
+                        <input type="date" name="date_naissance" class="form-control glass-input" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label text-info">Email (optionnel)</label>
+                        <input type="email" name="email" class="form-control glass-input">
+                    </div>
+
+                    <div class="mb-3">
                         <label class="form-label text-info">Annee</label>
                         <select name="annee" id="anneeSelect" class="form-select glass-select" required>
                             <option value="">-- Selectionner --</option>
                             {% for a in annees %}
-                                <option value="{{ a.id }}">{{ a.filiere.nom }} - Annee {{ a.numero }}</option>
+                                <option value="{{ a.id }}" data-filiere="{{ a.filiere.id }}">{{ a.filiere.nom }} - Annee {{ a.numero }}</option>
                             {% endfor %}
                         </select>
                     </div>
 
                     <div class="mb-3">
                         <label class="form-label text-info">Groupe</label>
-                        <select name="groupe" class="form-select glass-select">
+                        <select name="groupe" id="groupeSelect" class="form-select glass-select">
                             <option value="">-- Aucun --</option>
                             {% for g in groupes %}
-                                <option value="{{ g.id }}">{{ g.nom }}</option>
+                                <option value="{{ g.id }}" data-annee="{{ g.annee.id }}">{{ g.nom }}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -169,19 +184,62 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         let filiereText = filiereSelect.options[filiereSelect.selectedIndex].text;
-        let anneeText = anneeSelect.options[anneeSelect.selectedIndex].text;
+        let anneeOption = anneeSelect.options[anneeSelect.selectedIndex];
 
         filiereText = removeAccents(filiereText);
 
         const filiereCode = filiereText.substring(0, 4).toUpperCase();
-        const match = anneeText.match(/\d+/);
-        const anneeCode = match ? match[0] : 'XX';
+        const anneeCode = anneeOption ? anneeOption.text.match(/Annee (\d+)/)[1] : 'XX';
 
         matriculeInput.value = filiereCode + anneeCode + '-001';
     }
 
     filiereSelect.addEventListener('change', updateMatricule);
     anneeSelect.addEventListener('change', updateMatricule);
+
+    // Filtrage dynamique
+    const allAnneeOptions = Array.from(anneeSelect.querySelectorAll('option'));
+    const allGroupeOptions = Array.from(groupeSelect.querySelectorAll('option'));
+
+    function filterAnnees() {
+        const selectedFiliere = filiereSelect.value;
+        
+        // Clear current options except the first
+        while (anneeSelect.options.length > 1) {
+            anneeSelect.remove(1);
+        }
+        
+        // Add matching options
+        allAnneeOptions.forEach(option => {
+            if (option.value !== '' && option.dataset.filiere === selectedFiliere) {
+                anneeSelect.appendChild(option.cloneNode(true));
+            }
+        });
+        
+        anneeSelect.value = ''; // Reset selection
+        filterGroupes(); // Also reset groupes
+    }
+
+    function filterGroupes() {
+        const selectedAnnee = anneeSelect.value;
+        
+        // Clear current options except the first
+        while (groupeSelect.options.length > 1) {
+            groupeSelect.remove(1);
+        }
+        
+        // Add matching options
+        allGroupeOptions.forEach(option => {
+            if (option.value === '' || option.dataset.annee === selectedAnnee) {
+                groupeSelect.appendChild(option.cloneNode(true));
+            }
+        });
+        
+        groupeSelect.value = ''; // Reset selection
+    }
+
+    filiereSelect.addEventListener('change', filterAnnees);
+    anneeSelect.addEventListener('change', filterGroupes);
 
     // Envoi AJAX
     document.getElementById('enrolForm').onsubmit = async (e) => {

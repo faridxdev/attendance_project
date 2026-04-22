@@ -16,6 +16,7 @@ import shutil
 import glob
 import subprocess
 import sys
+import tempfile
 from deepface import DeepFace
 from .models import Etudiant, Filiere, Annee, Groupe, Matiere, Presence, Rapport
 from datetime import timedelta, datetime
@@ -39,49 +40,69 @@ def enroller_view(request):
 
 def capture_photo(request):
     if request.method == 'POST':
-        nom = request.POST.get('nom')
-        prenom = request.POST.get('prenom')
+        nom = request.POST.get('nom', '').strip()
+        prenom = request.POST.get('prenom', '').strip()
+        email = request.POST.get('email', '').strip()
         date_naissance = request.POST.get('date_naissance')
         filiere_id = request.POST.get('filiere')
         annee_id = request.POST.get('annee')
         groupe_id = request.POST.get('groupe')
 
-        # Vérifier si déjà inscrit cette année/filière
-        deja = Etudiant.objects.filter(nom=nom, prenom=prenom, date_naissance=date_naissance, filiere=filiere, annee=annee).first()
-        if deja:
-            return JsonResponse({'error': 'Cet étudiant est déjà enrôlé pour cette année/filière. Utilisez la mise à jour.'}, status=400)
-
-        # Récupérer l'image envoyée en base64 ou fichier
         photo_data = request.FILES.get('photo')
         if not photo_data:
             return JsonResponse({'error': 'Aucune photo'}, status=400)
 
-        temp_path = f"media/temp_{matricule}.jpg"
-        with open(temp_path, 'wb') as f:
-            for chunk in photo_data.chunks():
-                f.write(chunk)
-
         try:
-            embedding = generate_embedding_from_file(temp_path)
-        except Exception:
-            os.remove(temp_path)
-            return JsonResponse({'error': 'Aucun visage détecté'}, status=400)
+            filiere = Filiere.objects.get(id=filiere_id)
+            annee = Annee.objects.get(id=annee_id)
+            groupe = Groupe.objects.get(id=groupe_id) if groupe_id else None
+        except (Filiere.DoesNotExist, Annee.DoesNotExist):
+            return JsonResponse({'error': 'Filière ou année invalide'}, status=400)
+
+        deja = Etudiant.objects.filter(
+            nom__iexact=nom,
+            prenom__iexact=prenom,
+            date_naissance=date_naissance,
+            filiere=filiere,
+        ).first()
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+            for chunk in photo_data.chunks():
+                tmp_file.write(chunk)
+            tmp_file.flush()
+            tmp_path = tmp_file.name
+
+        embedding = generate_embedding_from_file(tmp_path)
+        os.remove(tmp_path)
+
         if embedding is None:
-            os.remove(temp_path)
             return JsonResponse({'error': 'Visage non détecté'}, status=400)
 
-        groupe = Groupe.objects.get(id=groupe_id) if groupe_id else None
+        if deja:
+            deja.nom = nom
+            deja.prenom = prenom
+            deja.email = email
+            deja.date_naissance = date_naissance
+            deja.filiere = filiere
+            deja.annee = annee
+            deja.groupe = groupe
+            deja.photo = photo_data
+            deja.save()
+            deja.save_embedding(embedding)
+            return JsonResponse({'success': True, 'message': 'Étudiant mis à jour avec succès.'})
+
         etudiant = Etudiant.objects.create(
             nom=nom,
             prenom=prenom,
+            email=email,
             date_naissance=date_naissance,
             filiere=filiere,
             annee=annee,
             groupe=groupe,
+            photo=photo_data,
         )
         etudiant.save_embedding(embedding)
-        os.remove(temp_path)
-        return JsonResponse({'success': True, 'message': f'Étudiant enregistré avec matricule {matricule}'})
+        return JsonResponse({'success': True, 'message': f'Étudiant enregistré avec matricule {etudiant.matricule}.'})
 
     return JsonResponse({'error': 'Méthode non autorisée'}, status=405)
 
@@ -122,13 +143,13 @@ def dashboard_instructeur(request):
             date=today,
             matiere_id=matiere_id,
             matiere__instructeur=request.user
-        ).select_related('etudiant', 'matiere').order_by('-heure')
+        ).select_related('etudiant', 'matiere', 'annee__filiere').order_by('-heure')
     else:
         # Toutes les présences du jour pour les matières de cet instructeur
         presences = Presence.objects.filter(
             date=today,
             matiere__instructeur=request.user
-        ).select_related('etudiant', 'matiere').order_by('-heure')
+        ).select_related('etudiant', 'matiere', 'annee__filiere').order_by('-heure')
     
     presents_count = presences.filter(statut='présent').count()
     
@@ -471,10 +492,10 @@ class SmartCamera:
 
         with pointage_lock:
             if pointage_actif:
-                statut, nom, matricule = process_frame(frame.copy())
+                statut, nom, prenom, matricule = process_frame(frame.copy())
 
-                if statut == 'présent' and nom and matricule:
-                    text = f"{nom} ({matricule}) - PRESENT"
+                if statut == 'présent' and nom and prenom and matricule:
+                    text = f"{nom} {prenom} ({matricule}) - PRESENT"
                     color = (0, 255, 0)  # Vert
                     cv2.putText(frame, text, (30, 60),
                                 cv2.FONT_HERSHEY_DUPLEX, 1.2, color, 3)
