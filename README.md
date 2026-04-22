@@ -1,6 +1,6 @@
 # 🎓 Système de Gestion de Présence Étudiante par Reconnaissance Faciale
 
-![Django](https://img.shields.io/badge/Django-5.2.9-green.svg) ![Python](https://img.shields.io/badge/Python-3.11+-blue.svg) ![DeepFace](https://img.shields.io/badge/DeepFace-0.0.93-orange.svg) ![OpenCV](https://img.shields.io/badge/OpenCV-4.10.0-red.svg) ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Django](https://img.shields.io/badge/Django-5.2.9-green.svg) ![Python](https://img.shields.io/badge/Python-3.11+-blue.svg) ![DeepFace](https://img.shields.io/badge/DeepFace-0.0.93-orange.svg) ![OpenCV](https://img.shields.io/badge/OpenCV-4.10.0-red.svg) ![License](https://img.shields.io/badge/License-GPL-yellow.svg)
 
 ## Présentation
 Application Django pour la gestion automatisée des présences étudiantes par reconnaissance faciale : enrôlement biométrique, pointage webcam, gestion fine des filières/années/groupes/matières, rapports PDF/CSV, administration avancée.
