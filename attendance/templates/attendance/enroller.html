@@ -120,7 +120,7 @@ Enrolement d'un etudiant
                     <label class="form-label text-neon-blue mb-3">CAPTURE BIOMETRIQUE</label>
 
                     <div class="position-relative">
-                        <video id="video" width="100%" autoplay class="border border-info rounded"></video>
+                        <video id="video" width="100%" autoplay playsinline muted class="border border-info rounded"></video>
                         <canvas id="canvas" style="display:none;"></canvas>
                     </div>
 
@@ -128,7 +128,10 @@ Enrolement d'un etudiant
                         <i class="fas fa-camera me-2"></i>CAPTURER VISAGE
                     </button>
 
-                    <input type="file" id="photoFileInput" accept="image/*;capture=camera" class="form-control glass-input mt-3" style="max-width: 100%;">
+                    <div id="fallbackCamera" class="mt-3 d-none">
+                        <p class="small text-warning">Le flux direct est indisponible. Utilisez le bouton ci-dessous :</p>
+                        <input type="file" id="photoFileInput" accept="image/*" capture="environment" class="form-control glass-input">
+                    </div>
                     <input type="hidden" name="photo" id="photoData">
 
                 </div>
@@ -163,9 +166,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Webcam
-    navigator.mediaDevices.getUserMedia({ video: true })
+    const constraints = {
+        video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+        }
+    };
+
+    navigator.mediaDevices.getUserMedia(constraints)
         .then(stream => video.srcObject = stream)
-        .catch(err => alert("Erreur camera : " + err));
+        .catch(err => {
+            console.error("Erreur camera : ", err);
+            // Si la caméra échoue (ex: pas de HTTPS), on montre le champ de fichier
+            document.getElementById('fallbackCamera').classList.remove('d-none');
+            captureBtn.classList.add('d-none');
+            video.parentElement.innerHTML = '<div class="alert alert-secondary">Mode photo mobile activé</div>';
+        });
 
     // Capture
     captureBtn.onclick = () => {
@@ -281,7 +298,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const data = await response.json();
-        alert(data.success ? data.message : data.error);
+        if (data.success) {
+            alert(data.message);
+            window.location.reload(); // Recharge la page pour vider le formulaire et la photo
+        } else {
+            alert(data.error);
+        }
     };
 
 });

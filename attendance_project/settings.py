@@ -27,6 +27,15 @@ DEBUG = True
 
 ALLOWED_HOSTS = ["*"]  # En développement, autorise tous les hôtes. À restreindre en production.
 
+# Autoriser les domaines Ngrok pour les requêtes POST (CSRF)
+CSRF_TRUSTED_ORIGINS = ["https://*.ngrok-free.app"]
+
+# Indiquer à Django qu'il est derrière un proxy sécurisé (Ngrok)
+# Cela permet de valider les requêtes HTTPS transmises en HTTP localement
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+USE_X_FORWARDED_PORT = True
+
 
 # Application definition
 
@@ -142,7 +151,7 @@ JAZZMIN_SETTINGS = {
     "site_icon": None,
     "welcome_sign": "Bienvenue dans l'administration",
     "copyright": "Système de Présence Scolaire",
-    "search_model": ["core.Utilisateur", "attendance.Eleve"],
+    "search_model": ["core.Utilisateur", "attendance.Etudiant"],
     "user_avatar": None,
 
     ############

@@ -18,6 +18,10 @@ import subprocess
 import sys
 import tempfile
 from deepface import DeepFace
+try:
+    from PIL import Image, ImageOps
+except ImportError:
+    Image = None
 from .models import Etudiant, Filiere, Annee, Groupe, Matiere, Presence, Rapport
 from datetime import timedelta, datetime
 from django.http import StreamingHttpResponse, HttpResponseForbidden, HttpResponse
@@ -59,10 +63,9 @@ def capture_photo(request):
         except (Filiere.DoesNotExist, Annee.DoesNotExist):
             return JsonResponse({'error': 'Filière ou année invalide'}, status=400)
 
+        # Vérifier si l'étudiant existe déjà par nom, prénom, date de naissance et filière
         deja = Etudiant.objects.filter(
-            nom__iexact=nom,
-            prenom__iexact=prenom,
-            date_naissance=date_naissance,
+            nom__iexact=nom, prenom__iexact=prenom, date_naissance=date_naissance,
             filiere=filiere,
         ).first()
 
@@ -70,10 +73,25 @@ def capture_photo(request):
             for chunk in photo_data.chunks():
                 tmp_file.write(chunk)
             tmp_file.flush()
-            tmp_path = tmp_file.name
+            tmp_path = tmp_file.name # Récupérer le chemin du fichier temporaire
 
-        embedding = generate_embedding_from_file(tmp_path)
-        os.remove(tmp_path)
+            # Prétraitement : Correction de l'orientation mobile (EXIF) et redimensionnement
+            if Image:
+                try:
+                    with Image.open(tmp_path) as img_pil:
+                        img_pil = ImageOps.exif_transpose(img_pil)  # Redresse l'image si elle est sur le côté
+                        img_pil = img_pil.convert('RGB')
+                        img_pil.thumbnail((1000, 1000))  # Taille optimale pour DeepFace
+                        img_pil.save(tmp_path, quality=90)
+                except Exception as e:
+                    print(f"Erreur de prétraitement Image : {e}")
+
+            embedding = generate_embedding_from_file(tmp_path)
+            # Le fichier temporaire sera automatiquement supprimé à la sortie du bloc 'with'
+            # si delete=True (par défaut). Si delete=False, il faut le supprimer manuellement.
+            # Puisque nous avons delete=False, nous devons le supprimer explicitement.
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
         if embedding is None:
             return JsonResponse({'error': 'Visage non détecté'}, status=400)
@@ -124,6 +142,11 @@ def mobile_pointage_capture(request):
         image_bytes = photo_data.read()
         frame_array = np.frombuffer(image_bytes, np.uint8)
         frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+        
+        # Redimensionner l'image si elle vient d'un smartphone (souvent trop grande pour DeepFace)
+        if frame is not None and frame.shape[1] > 1000:
+            scaling_factor = 1000 / frame.shape[1]
+            frame = cv2.resize(frame, None, fx=scaling_factor, fy=scaling_factor)
 
         if frame is None:
             return JsonResponse({'error': 'Image invalide.'}, status=400)

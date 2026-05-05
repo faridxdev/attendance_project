@@ -133,7 +133,7 @@ class Etudiant(models.Model):
     annee = models.ForeignKey(Annee, on_delete=models.CASCADE, related_name='etudiants')
     groupe = models.ForeignKey(Groupe, on_delete=models.SET_NULL, null=True, blank=True)
 
-    photo = models.ImageField(upload_to='etudiants/%Y/%m/', blank=True, null=True)
+    photo = models.ImageField(upload_to='etudiants/%Y/%m/%d/', blank=True, null=True)
     embedding = models.BinaryField(null=True, blank=True)
 
     date_inscription = models.DateField(auto_now_add=True)
@@ -174,6 +174,20 @@ class Etudiant(models.Model):
                 img.save(self.photo.path, optimize=True, quality=70)
             except Exception:
                 pass
+
+    def save_embedding(self, raw_embedding: np.ndarray):
+        # Utilise une clé par défaut si ENCRYPTION_KEY n'est pas définie
+        key = os.getenv('ENCRYPTION_KEY', 'o6V6H_V6X_zV9fK8Y9z7X5c4V3b2N1m0L9k8J7h6G5f=').encode()
+        f = Fernet(key)
+        self.embedding = f.encrypt(raw_embedding.tobytes())
+        self.save()
+
+    def get_embedding(self):
+        if not self.embedding:
+            return None
+        key = os.getenv('ENCRYPTION_KEY', 'o6V6H_V6X_zV9fK8Y9z7X5c4V3b2N1m0L9k8J7h6G5f=').encode()
+        f = Fernet(key)
+        return np.frombuffer(f.decrypt(self.embedding), dtype=np.float32)
 
     def __str__(self):
         return f"{self.matricule} - {self.nom} {self.prenom}"
