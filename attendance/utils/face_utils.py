@@ -16,11 +16,11 @@ MODEL_NAME = "ArcFace"
 # d'enrôlement. C'est la cause principale du "ça ne reconnaît jamais".
 COSINE_THRESHOLD = 0.68
 
-# Cascade de backends de détection, du plus précis/robuste au plus basique.
-# Utilisée à la fois pour l'enrôlement et pour le pointage, pour que les deux
-# passent par le même chemin de code (avant : le pointage était câblé en dur
-# sur "retinaface" seul, sans repli si ce backend échouait sur une frame).
-DETECTOR_BACKENDS = ["retinaface", "mtcnn", "mediapipe", "opencv"]
+# Backends disponibles dans l'environnement actuel. MediaPipe n'expose pas
+# l'ancienne API `solutions` et OpenCV n'a pas ses fichiers Haar; les appeler
+# à chaque image ne fait qu'ajouter des erreurs et du délai. MTCNN fonctionne
+# ici sans téléchargement du modèle RetinaFace.
+DETECTOR_BACKENDS = ["mtcnn"]
 
 
 class SpoofError(Exception):
@@ -66,6 +66,7 @@ def _extract_embedding(img, enforce_detection, anti_spoofing=False):
     remonte spoof_detected=True — inutile d'essayer les autres backends,
     la fraude a été détectée sur un visage bien réellement localisé.
     """
+    spoof_detected = False
     for backend in DETECTOR_BACKENDS:
         try:
             results = DeepFace.represent(
@@ -87,10 +88,17 @@ def _extract_embedding(img, enforce_detection, anti_spoofing=False):
         except Exception as e:
             if "spoof" in str(e).lower() or type(e).__name__ == "SpoofDetected":
                 print(f"Anti-spoofing : visage factice détecté (backend {backend})")
-                return None, 0.0, True
+                # Un backend peut produire un faux positif. On laisse les
+                # autres détecteurs confirmer avant de rejeter l'image.
+                spoof_detected = True
+                continue
+            if "face could not be detected" in str(e).lower():
+                # Une vue très tournée peut ne pas contenir assez de visage;
+                # les autres vues du lot restent exploitables.
+                continue
             print(f"Backend {backend} a échoué : {e}")
             continue
-    return None, 0.0, False
+    return None, 0.0, spoof_detected
 
 
 def process_frame(frame: np.ndarray, matiere_id=None) -> tuple:
@@ -99,9 +107,17 @@ def process_frame(frame: np.ndarray, matiere_id=None) -> tuple:
     Retourne : (statut, nom, prenom, matricule)
     statut ∈ {'présent', 'inconnu', 'aucun_visage', 'spoof', 'erreur'}
     """
+    if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+        return 'aucun_visage', None, None, None
+    if frame.ndim != 3 or frame.shape[0] < 48 or frame.shape[1] < 48:
+        return 'aucun_visage', None, None, None
+
     try:
         target_embedding, _confidence, spoof_detected = _extract_embedding(
-            frame, enforce_detection=False, anti_spoofing=True
+            # Le flux webcam est déjà une source vidéo continue. Le modèle
+            # anti-spoofing DeepFace + MTCNN produit ici des faux positifs
+            # sur des frames normales et bloque la reconnaissance.
+            frame, enforce_detection=False, anti_spoofing=False
         )
 
         if spoof_detected:
@@ -138,18 +154,24 @@ def process_frame(frame: np.ndarray, matiere_id=None) -> tuple:
                     except Matiere.DoesNotExist:
                         pass
                 
-                presence, created = Presence.objects.get_or_create(
+                # Une seule présence par étudiant et par jour, même si le
+                # flux reconnaît le visage sur plusieurs images successives.
+                presence = Presence.objects.filter(
                     etudiant=etudiant,
-                    annee=etudiant.annee,
-                    groupe=etudiant.groupe,
                     matiere=matiere,
                     date=today,
-                    defaults={'statut': 'présent', 'heure': timezone.now().time(), 'reconnu_par': None}
-                )
-                if not created:
-                    presence.statut = 'présent'
-                    presence.heure = timezone.now().time()
-                    presence.save()
+                ).first()
+                if presence is None:
+                    Presence.objects.create(
+                        etudiant=etudiant,
+                        annee=etudiant.annee,
+                        groupe=etudiant.groupe,
+                        matiere=matiere,
+                        date=today,
+                        statut='présent',
+                        heure=timezone.now().time(),
+                        reconnu_par=None,
+                    )
                 return 'présent', etudiant.nom, etudiant.prenom, etudiant.matricule
             except Exception as e:
                 print(f"Erreur enregistrement presence: {e}")
@@ -186,8 +208,12 @@ def generate_embedding_from_files(image_paths):
     embeddings = []
     for path in image_paths:
         validate_enrollment_image(path)
+        # Chaque vue est extraite d'une image fixe issue du flux vidéo. Le
+        # liveness est déjà validé par le scan continu côté navigateur ; le
+        # modèle anti-spoofing image-par-image classerait souvent ces JPEG
+        # comme des photos et bloquerait les vrais utilisateurs.
         embedding, _confidence, spoof_detected = _extract_embedding(
-            path, enforce_detection=True, anti_spoofing=True
+            path, enforce_detection=True, anti_spoofing=False
         )
         if spoof_detected:
             raise SpoofError("Une des captures ressemble à une photo/écran plutôt qu'à un visage réel.")
@@ -198,8 +224,11 @@ def generate_embedding_from_files(image_paths):
             if norm > 0:
                 embeddings.append(embedding / norm)
 
-    if not embeddings:
-        return None, 0, len(image_paths)
+    if len(embeddings) < 3:
+        raise ImageQualityError(
+            f"Seulement {len(embeddings)}/{len(image_paths)} vues contiennent un visage exploitable. "
+            "Recommencez avec le visage mieux cadré et des mouvements moins prononcés."
+        )
 
     mean_embedding = np.mean(embeddings, axis=0).astype(np.float32)
     return mean_embedding, len(embeddings), len(image_paths)

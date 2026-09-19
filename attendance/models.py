@@ -215,7 +215,7 @@ class Presence(models.Model):
 
     class Meta:
         ordering = ['-date', '-heure']
-        unique_together = ['etudiant', 'date']
+        unique_together = ['etudiant', 'matiere', 'date']
         verbose_name = "Présence"
         verbose_name_plural = "Présences"
 

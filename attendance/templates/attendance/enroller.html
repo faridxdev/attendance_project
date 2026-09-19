@@ -128,10 +128,12 @@ Enrolement d'un etudiant
 
                     <p id="captureInstruction" class="mt-3 fw-bold text-info">Placez votre visage au centre</p>
 
-                    <div class="d-flex justify-content-center gap-2 mb-2">
+                    <div class="d-flex flex-wrap justify-content-center gap-2 mb-2">
                         <div class="thumb-slot" id="thumb0"><i class="fas fa-user"></i></div>
                         <div class="thumb-slot" id="thumb1"><i class="fas fa-user"></i></div>
                         <div class="thumb-slot" id="thumb2"><i class="fas fa-user"></i></div>
+                        <div class="thumb-slot" id="thumb3"><i class="fas fa-user"></i></div>
+                        <div class="thumb-slot" id="thumb4"><i class="fas fa-user"></i></div>
                     </div>
 
                     <button type="button" id="captureBtn" class="btn btn-neon mt-2">
@@ -142,7 +144,7 @@ Enrolement d'un etudiant
                     </button>
 
                     <div id="fallbackCamera" class="mt-3 d-none">
-                        <p class="small text-warning">Le flux direct est indisponible. Sélectionnez exactement 3 photos : face, gauche et droite.</p>
+                        <p class="small text-warning">Le flux direct est indisponible. Sélectionnez exactement 5 photos : face, gauche, droite, haut et bas.</p>
                         <input type="file" id="photoFileInput" accept="image/*" capture="environment" multiple class="form-control glass-input">
                     </div>
 
@@ -189,6 +191,7 @@ Enrolement d'un etudiant
     border-radius: 50% !important;
 }
 .scan-ring {
+    display: none;
     position: absolute;
     inset: 1%;
     aspect-ratio: 1;
@@ -247,7 +250,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const retryBtn = document.getElementById('retryBtn');
     const photoFileInput = document.getElementById('photoFileInput');
     const instruction = document.getElementById('captureInstruction');
-    const thumbs = [document.getElementById('thumb0'), document.getElementById('thumb1'), document.getElementById('thumb2')];
+    const thumbs = [0, 1, 2, 3, 4].map(index => document.getElementById(`thumb${index}`));
     const scanStage = document.querySelector('.scan-stage');
     const scanRing = document.getElementById('scanRing');
 
@@ -256,7 +259,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const anneeSelect = document.getElementById('anneeSelect');
 
     // Étapes de capture, comme Face ID qui te fait bouger la tête.
-    const steps = ['Commencez au centre', 'Continuez le cercle lentement', 'Terminez le tour'];
+    const steps = [
+        '1/5 Face',
+        '2/5 Tournez légèrement à gauche',
+        '3/5 Tournez légèrement à droite',
+        '4/5 Levez légèrement la tête',
+        '5/5 Baissez légèrement la tête'
+    ];
     let currentStep = 0;
     let capturedShots = []; // dataURLs
     let scanTimer = null;
@@ -268,6 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let movementDirection = null;
     let motionSamples = 0;
     let lastMotionAt = 0;
+    let stageDeadline = 0;
     const faceDetector = 'FaceDetector' in window ? new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
     const sectorCount = 12;
     for (let index = 0; index < 48; index++) {
@@ -292,11 +302,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateInstruction() {
         if (currentStep >= steps.length) {
-            instruction.textContent = '✅ Tour complet détecté, prêt à valider';
+            instruction.textContent = '✅ 5 vues enregistrées, prêt à valider';
             captureBtn.classList.add('d-none');
             retryBtn.classList.remove('d-none');
         } else {
-            instruction.textContent = `${steps[currentStep]}. Bougez lentement la tête.`;
+            instruction.textContent = `${steps[currentStep]}. Vous avez 5 secondes.`;
         }
     }
 
@@ -333,41 +343,33 @@ document.addEventListener('DOMContentLoaded', () => {
         return canvas.toDataURL('image/jpeg', 0.92);
     }
 
-    function captureAfterCompletedScan() {
-        let captures = 0;
-        const captureTimer = setInterval(() => {
-            const frame = captureCurrentFrame();
-            if (frame) {
-                capturedShots.push(frame);
-                thumbs[captures].style.backgroundImage = `url(${frame})`;
-                thumbs[captures].classList.add('filled');
-                captures++;
-            }
-            if (captures === 3) {
-                clearInterval(captureTimer);
-                currentStep = steps.length;
-                captureBtn.classList.add('d-none');
-                retryBtn.classList.remove('d-none');
-                instruction.textContent = '✅ Mouvement validé, 3 vues enregistrées';
-            }
-        }, 350);
-    }
-
-    function finishScan() {
+    function finishScan(message) {
         clearInterval(scanTimer);
         scanTimer = null;
         scanStage.classList.remove('scanning');
         captureBtn.disabled = false;
-        if (motionSamples >= 8) {
-            instruction.textContent = '✅ Mouvement validé, enregistrement des vues...';
-            progressBarFill.style.width = '100%';
-            captureAfterCompletedScan();
+        instruction.textContent = message;
+        captureBtn.innerHTML = '<i class="fas fa-redo me-2"></i>REFAIRE LE SCAN';
+    }
+
+    function captureStage() {
+        const frame = captureCurrentFrame();
+        if (!frame || !thumbs[currentStep]) return false;
+        capturedShots.push(frame);
+        thumbs[currentStep].style.backgroundImage = `url(${frame})`;
+        thumbs[currentStep].classList.add('filled');
+        currentStep++;
+        progressBarFill.style.width = `${(currentStep / steps.length) * 100}%`;
+        stageDeadline = performance.now() + 5000;
+        dashes.forEach((dash, index) => dash.classList.toggle('active', index < currentStep * 9));
+        if (currentStep === steps.length) {
+            finishScan('✅ 5 vues enregistrées, prêt à valider');
+            captureBtn.classList.add('d-none');
+            retryBtn.classList.remove('d-none');
         } else {
-            currentStep = 1;
-            instruction.textContent = 'Mouvement insuffisant. Recommencez en tournant lentement la tête.';
-            captureBtn.innerHTML = '<i class="fas fa-redo me-2"></i>REFAIRE LE SCAN';
-            return;
+            updateInstruction();
         }
+        return true;
     }
 
     function markSector(sector) {
@@ -428,7 +430,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         lastFrame = current;
-        if (energy < 3500) return null;
+        // Ignore the small variations caused by autofocus, exposure and
+        // camera noise; they must not prevent the first stable capture.
+        if (energy < 7000) return null;
         return {
             x: weightedX / energy / sample.width - .5,
             y: weightedY / energy / sample.height - .5,
@@ -438,33 +442,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function trackScanFrame() {
         if (!scanTimer) return;
-        const motion = detectPixelMotion();
-        let point = null;
-        if (faceDetector) {
-            try {
-                const faces = await faceDetector.detect(video);
-                if (faces.length) point = updateFacePosition(faces[0].boundingBox);
-            } catch (error) { point = null; }
-        }
-        if (!point) point = motion;
-        if (motion && performance.now() - lastMotionAt > 260) {
-            motionSamples++;
-            lastMotionAt = performance.now();
-            const motionAngle = (Math.atan2(motion.y, motion.x) * 180 / Math.PI + 450) % 360;
-            markSector(Math.floor(motionAngle / 30));
-        }
-        if (point && lastFacePoint && (Math.abs(point.x - lastFacePoint.x) + Math.abs(point.y - lastFacePoint.y)) > .025) {
-            const angle = (Math.atan2(point.y, point.x) * 180 / Math.PI + 450) % 360;
-            markSector(Math.floor(angle / 30));
-        }
-        if (point) lastFacePoint = point;
+        if (performance.now() >= stageDeadline) captureStage();
     }
 
     // Un seul scan continu, comme l'assistant Face ID. Les images sont
     // extraites automatiquement du flux et ne sont jamais choisies à la main.
     captureBtn.onclick = () => {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            alert('Votre appareil ne prend pas en charge la capture en direct. Utilisez le champ de fichier ci-dessous pour sélectionner une photo.');
+            alert('Votre appareil ne prend pas en charge la capture en direct. Utilisez le champ de fichier ci-dessous pour sélectionner 5 vues.');
             return;
         }
         if (scanTimer || !video.videoWidth) return;
@@ -483,9 +468,9 @@ document.addEventListener('DOMContentLoaded', () => {
         scanStage.classList.add('scanning');
         captureBtn.disabled = true;
         captureBtn.innerHTML = '<i class="fas fa-sync fa-spin me-2"></i>SCAN EN COURS';
-        instruction.textContent = 'Placez votre visage au centre, puis faites lentement le tour du cercle';
+        instruction.textContent = 'Placez votre visage au centre. La capture commence dans 5 secondes.';
+        stageDeadline = performance.now() + 5000;
         scanTimer = setInterval(trackScanFrame, 180);
-        setTimeout(() => { if (scanTimer) finishScan(); }, 15000);
     };
 
     retryBtn.onclick = () => {
@@ -499,6 +484,7 @@ document.addEventListener('DOMContentLoaded', () => {
         movementDirection = null;
         motionSamples = 0;
         lastMotionAt = 0;
+        stageDeadline = 0;
         lastFacePoint = null;
         lastFrame = null;
         scanStage.classList.remove('scanning');
@@ -514,7 +500,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     photoFileInput.addEventListener('change', () => {
         // Mode secours (pas de webcam) : on vide les captures live, on se
-        // basera sur les fichiers sélectionnés (1 à 3) lors de l'envoi.
+        // basera sur les fichiers sélectionnés (5 vues) lors de l'envoi.
         capturedShots = [];
     });
 
@@ -590,7 +576,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const formData = new FormData(e.target);
 
-        if (capturedShots.length > 0) {
+        if (capturedShots.length === 5) {
             for (let i = 0; i < capturedShots.length; i++) {
                 if (!capturedShots[i]) continue;
                 const res = await fetch(capturedShots[i]);
@@ -598,11 +584,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 formData.append('photos', blob, `capture_${i}.jpg`);
             }
         } else if (photoFileInput.files.length > 0) {
-            Array.from(photoFileInput.files).slice(0, 3).forEach((file, i) => {
+            Array.from(photoFileInput.files).slice(0, 5).forEach((file, i) => {
                 formData.append('photos', file, file.name || `capture_${i}.jpg`);
             });
         } else {
-            alert('Veuillez capturer exactement 3 vues: face, gauche et droite.');
+            alert('Veuillez attendre les 5 captures: face, gauche, droite, haut et bas.');
+            return;
+        }
+
+        if (formData.getAll('photos').length !== 5) {
+            alert('Il faut exactement 5 vues pour terminer l\'enregistrement.');
             return;
         }
 

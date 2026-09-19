@@ -17,6 +17,7 @@ import shutil
 import glob
 import subprocess
 import sys
+import time
 import tempfile
 import io
 
@@ -70,9 +71,9 @@ def capture_photo(request):
                 photos_data = [single]
         if not photos_data:
             return JsonResponse({'error': 'Aucune photo'}, status=400)
-        if len(photos_data) != 3:
+        if len(photos_data) != 5:
             return JsonResponse({
-                'error': 'Pour une empreinte type Face ID, capturez exactement 3 vues: face, gauche et droite.'
+                'error': 'Capturez les 5 vues demandées: face, gauche, droite, haut et bas.'
             }, status=400)
 
         try:
@@ -589,31 +590,47 @@ def restart_services(request):
 
 # Variables globales pour contrôle
 pointage_actif = False
+pointage_matiere_id = None
 pointage_lock = threading.Lock()
 frame_queue = queue.Queue(maxsize=1)  # Dernière frame uniquement
 
 class SmartCamera:
     def __init__(self):
         self.video = None
+        self.last_analysis_at = 0.0
+        self.last_result = ('aucun_visage', None, None, None)
+        self.analysis_lock = threading.Lock()
+        self.analysis_in_progress = False
+        preferred_index = int(os.getenv('CAMERA_INDEX', '1'))
+        camera_indices = list(dict.fromkeys([preferred_index, 0]))
         # Backends spécifiques à l'OS en priorité, CAP_ANY en repli universel.
         # Avant : uniquement CAP_DSHOW/CAP_MSMF/CAP_VFW (Windows), donc échec
         # systématique sur Linux/Mac même avec une webcam qui fonctionne.
         if sys.platform.startswith('win'):
-            self.backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
+            # Camo s'ouvre avec DirectShow mais peut y renvoyer une image
+            # noire; Media Foundation fournit le flux réel.
+            self.backends = [cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY]
         elif sys.platform == 'darwin':
             self.backends = [cv2.CAP_AVFOUNDATION, cv2.CAP_ANY]
         else:
             self.backends = [cv2.CAP_V4L2, cv2.CAP_ANY]
 
-        for backend in self.backends:
-            try:
-                capture = cv2.VideoCapture(0, backend)
-                if capture.isOpened():
-                    self.video = capture
-                    break
-                capture.release()
-            except Exception:
-                continue
+        for camera_index in camera_indices:
+            for backend in self.backends:
+                try:
+                    capture = cv2.VideoCapture(camera_index, backend)
+                    if capture.isOpened():
+                        success, test_frame = capture.read()
+                        if success and test_frame is not None and float(np.mean(test_frame)) > 2.0:
+                            self.video = capture
+                            print(f"Caméra sélectionnée: index={camera_index}, backend={backend}")
+                            break
+                        capture.release()
+                    capture.release()
+                except Exception:
+                    continue
+            if self.video is not None:
+                break
 
         if self.video is None or not self.video.isOpened():
             raise RuntimeError(
@@ -628,6 +645,15 @@ class SmartCamera:
         if hasattr(self, 'video') and self.video is not None:
             self.video.release()
 
+    def _analyze_frame(self, frame, matiere_id):
+        try:
+            result = process_frame(frame, matiere_id=matiere_id)
+            with self.analysis_lock:
+                self.last_result = result
+        finally:
+            with self.analysis_lock:
+                self.analysis_in_progress = False
+
     def get_frame(self):
         if self.video is None or not self.video.isOpened():
             return None
@@ -640,8 +666,25 @@ class SmartCamera:
         frame = cv2.resize(frame, (640, 480))
 
         with pointage_lock:
-            if pointage_actif:
-                statut, nom, prenom, matricule = process_frame(frame.copy())
+            active = pointage_actif
+            matiere_id = pointage_matiere_id
+
+        if active:
+            now = time.monotonic()
+            with self.analysis_lock:
+                ready_for_analysis = (
+                    now - self.last_analysis_at >= 1.0
+                    and not self.analysis_in_progress
+                )
+                if ready_for_analysis:
+                    self.last_analysis_at = now
+                    self.analysis_in_progress = True
+                    threading.Thread(
+                        target=self._analyze_frame,
+                        args=(frame.copy(), matiere_id),
+                        daemon=True,
+                    ).start()
+                statut, nom, prenom, matricule = self.last_result
 
                 if statut == 'présent' and nom and prenom and matricule:
                     text = f"{nom} {prenom} ({matricule}) - PRESENT"
@@ -698,9 +741,10 @@ def video_feed(request):
 @login_required
 def start_pointage(request):
     if request.method == 'POST' and request.user.role == 'instructeur':
-        global pointage_actif
+        global pointage_actif, pointage_matiere_id
         with pointage_lock:
             pointage_actif = True
+            pointage_matiere_id = request.POST.get('matiere_id') or None
         return JsonResponse({'status': 'started'})
     return JsonResponse({'status': 'error'}, status=400)
 
@@ -708,11 +752,46 @@ def start_pointage(request):
 @login_required
 def stop_pointage(request):
     if request.method == 'POST' and request.user.role == 'instructeur':
-        global pointage_actif
+        global pointage_actif, pointage_matiere_id
         with pointage_lock:
             pointage_actif = False
+            pointage_matiere_id = None
         return JsonResponse({'status': 'stopped'})
     return JsonResponse({'status': 'error'}, status=400)
+
+
+@login_required
+def presence_updates(request):
+    """Retourne les présences du jour pour actualiser le journal enseignant."""
+    if request.user.role != 'instructeur':
+        return JsonResponse({'error': 'Accès refusé'}, status=403)
+
+    matiere_id = request.GET.get('matiere_id')
+    presences = Presence.objects.filter(
+        date=timezone.now().date(),
+        matiere__instructeur=request.user,
+    )
+    if matiere_id:
+        presences = presences.filter(matiere_id=matiere_id)
+
+    presences = presences.select_related(
+        'etudiant', 'matiere', 'annee__filiere'
+    ).order_by('-heure')
+
+    return JsonResponse({
+        'presences': [
+            {
+                'matricule': presence.etudiant.matricule,
+                'etudiant': f'{presence.etudiant.nom} {presence.etudiant.prenom}',
+                'matiere': presence.matiere.nom if presence.matiere else '-',
+                'filiere': presence.annee.filiere.nom if presence.annee else '-',
+                'heure': presence.heure.strftime('%H:%M'),
+                'statut': presence.statut,
+            }
+            for presence in presences[:50]
+        ],
+        'presents_count': presences.filter(statut='présent').count(),
+    })
 
 
 def login_view(request):

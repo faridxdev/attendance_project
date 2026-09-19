@@ -98,7 +98,10 @@
     <div class="video-section glass-panel p-3 text-center mb-5">
         <h4>Flux webcam en direct</h4>
         <div class="position-relative d-inline-block">
-            <video id="videoStream" autoplay muted playsinline width="640" height="480" class="img-fluid rounded border border-info"></video>
+            <div id="videoPlaceholder" class="video-placeholder rounded border border-info">
+                <i class="fas fa-video-slash me-2"></i>Flux webcam en attente
+            </div>
+            <img id="videoStream" width="640" height="480" class="img-fluid rounded border border-info d-none" alt="Flux webcam en direct">
             <canvas id="scanCanvas" style="display:none;"></canvas>
             <div id="overlayText" class="position-absolute top-50 start-50 translate-middle text-white fw-bold fs-3 bg-dark bg-opacity-50 p-3 rounded d-none">
                 En attente...
@@ -120,7 +123,7 @@
                     <th>Statut</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="activityLogBody">
                 {% for presence in presences %}
                 <tr>
                     <td>{{ presence.etudiant.matricule }}</td>
@@ -146,7 +149,7 @@
     </div>
 
     <div class="glass-panel mt-4 p-3 text-center">
-        <h5 class="m-0">TOTAL PRÉSENTS : <span class="text-info">{{ presents_count }}</span></h5>
+        <h5 class="m-0">TOTAL PRÉSENTS : <span id="presentsCount" class="text-info">{{ presents_count }}</span></h5>
     </div>
 </div>
 
@@ -173,6 +176,16 @@
     
     .glass-select { background: rgba(0,0,0,0.3) !important; color: white !important; border: 1px solid rgba(255,255,255,0.1) !important; }
     #overlayText { font-family: 'Orbitron', sans-serif; pointer-events: none; }
+    .video-placeholder {
+        width: 640px;
+        height: 480px;
+        max-width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: rgba(255, 255, 255, 0.65);
+        background: rgba(0, 0, 0, 0.28);
+    }
 </style>
 
 <script>
@@ -189,10 +202,53 @@ const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const statusMsg = document.getElementById('statusMsg');
 const stream = document.getElementById('videoStream');
+const videoPlaceholder = document.getElementById('videoPlaceholder');
 const overlay = document.getElementById('overlayText');
 const matiereSelect = document.getElementById('matiereSelect');
+const activityLogBody = document.getElementById('activityLogBody');
+const presentsCount = document.getElementById('presentsCount');
+let activityRefreshTimer = null;
+
+stream.onload = () => {
+    videoPlaceholder.classList.add('d-none');
+    stream.classList.remove('d-none');
+    overlay.classList.add('d-none');
+};
+stream.onerror = () => {
+    stream.classList.add('d-none');
+    videoPlaceholder.classList.remove('d-none');
+    overlay.textContent = 'Flux Camo indisponible';
+    overlay.classList.remove('d-none');
+};
 
 matiereSelect.addEventListener('change', function() { startBtn.disabled = !this.value; });
+
+async function refreshActivityLog() {
+    if (!matiereSelect.value) return;
+    try {
+        const response = await fetch(
+            "{% url 'attendance:presence_updates' %}?matiere_id=" + encodeURIComponent(matiereSelect.value),
+            {headers: {'X-Requested-With': 'XMLHttpRequest'}}
+        );
+        if (!response.ok) return;
+        const data = await response.json();
+        activityLogBody.innerHTML = data.presences.length
+            ? data.presences.map(presence => `
+                <tr>
+                    <td>${presence.matricule}</td>
+                    <td>${presence.etudiant}</td>
+                    <td>${presence.matiere}</td>
+                    <td>${presence.filiere}</td>
+                    <td>${presence.heure}</td>
+                    <td><span class="badge-glow badge-success">${presence.statut.toUpperCase()}</span></td>
+                </tr>
+            `).join('')
+            : '<tr><td colspan="6" class="text-center py-3">Aucune donnée détectée.</td></tr>';
+        presentsCount.textContent = data.presents_count;
+    } catch (error) {
+        console.warn('Actualisation du journal impossible:', error);
+    }
+}
 
 async function togglePointage(action) {
     const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
@@ -210,9 +266,27 @@ async function togglePointage(action) {
         const actif = (action === 'start');
         startBtn.disabled = actif;
         stopBtn.disabled = !actif;
-        overlay.classList.toggle('d-none', !actif);
         statusMsg.innerHTML = `ÉTAT DU SYSTÈME : <span class="${actif ? 'text-success' : 'text-danger'} fw-bold">${actif ? 'ACTIF' : 'VEILLE'}</span>`;
-        stream.src = "{% url 'attendance:video_feed' %}?" + new Date().getTime();
+        if (actif) {
+            overlay.textContent = 'Connexion à la webcam...';
+            overlay.classList.remove('d-none');
+            videoPlaceholder.classList.remove('d-none');
+            stream.removeAttribute('src');
+            stream.classList.add('d-none');
+            window.setTimeout(() => {
+                stream.src = "{% url 'attendance:video_feed' %}?t=" + Date.now();
+            }, 50);
+            await refreshActivityLog();
+            activityRefreshTimer = window.setInterval(refreshActivityLog, 2500);
+        } else {
+            if (activityRefreshTimer) window.clearInterval(activityRefreshTimer);
+            activityRefreshTimer = null;
+            stream.removeAttribute('src');
+            stream.classList.add('d-none');
+            videoPlaceholder.classList.remove('d-none');
+            overlay.textContent = 'En attente...';
+            overlay.classList.remove('d-none');
+        }
     }
 }
 
