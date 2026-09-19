@@ -117,22 +117,34 @@ Enrolement d'un etudiant
                 <!-- WEBCAM -->
                 <div class="col-md-6 text-center">
 
-                    <label class="form-label text-neon-blue mb-3">CAPTURE BIOMETRIQUE</label>
+                    <label class="form-label text-neon-blue mb-3">CAPTURE BIOMÉTRIQUE</label>
 
-                    <div class="position-relative">
+                    <div class="scan-stage position-relative">
                         <video id="video" width="100%" autoplay playsinline muted class="border border-info rounded"></video>
+                        <div id="scanRing" class="scan-ring" aria-hidden="true"></div>
+                        <div class="scan-face-guide"><i class="fas fa-user"></i></div>
                         <canvas id="canvas" style="display:none;"></canvas>
                     </div>
 
-                    <button type="button" id="captureBtn" class="btn btn-neon mt-3">
-                        <i class="fas fa-camera me-2"></i>CAPTURER VISAGE
+                    <p id="captureInstruction" class="mt-3 fw-bold text-info">Placez votre visage au centre</p>
+
+                    <div class="d-flex justify-content-center gap-2 mb-2">
+                        <div class="thumb-slot" id="thumb0"><i class="fas fa-user"></i></div>
+                        <div class="thumb-slot" id="thumb1"><i class="fas fa-user"></i></div>
+                        <div class="thumb-slot" id="thumb2"><i class="fas fa-user"></i></div>
+                    </div>
+
+                    <button type="button" id="captureBtn" class="btn btn-neon mt-2">
+                        <i class="fas fa-play me-2"></i>DÉMARRER LE SCAN
+                    </button>
+                    <button type="button" id="retryBtn" class="btn btn-neon-red mt-2 d-none">
+                        <i class="fas fa-redo me-2"></i>RECOMMENCER
                     </button>
 
                     <div id="fallbackCamera" class="mt-3 d-none">
-                        <p class="small text-warning">Le flux direct est indisponible. Utilisez le bouton ci-dessous :</p>
-                        <input type="file" id="photoFileInput" accept="image/*" capture="environment" class="form-control glass-input">
+                        <p class="small text-warning">Le flux direct est indisponible. Sélectionnez exactement 3 photos : face, gauche et droite.</p>
+                        <input type="file" id="photoFileInput" accept="image/*" capture="environment" multiple class="form-control glass-input">
                     </div>
-                    <input type="hidden" name="photo" id="photoData">
 
                 </div>
 
@@ -147,18 +159,146 @@ Enrolement d'un etudiant
     </div>
 </div>
 
+<style>
+.thumb-slot {
+    width: 60px; height: 60px;
+    border: 2px dashed rgba(0,255,255,0.4);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(255,255,255,0.3);
+    background-size: cover; background-position: center;
+    overflow: hidden;
+}
+.thumb-slot.filled { border: 2px solid #00ff88; color: transparent; }
+
+.scan-stage {
+    position: relative;
+    width: min(100%, 520px);
+    aspect-ratio: 1;
+    margin: 0 auto;
+    overflow: hidden;
+    border-radius: 50%;
+    background: #050912;
+}
+.scan-stage video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border: 0 !important;
+    border-radius: 50% !important;
+}
+.scan-ring {
+    position: absolute;
+    inset: 1%;
+    aspect-ratio: 1;
+    --ring-radius: 50%;
+    pointer-events: none;
+    border-radius: 50%;
+}
+.scan-dash {
+    position: absolute;
+    width: 4px; height: 18px;
+    left: calc(50% - 2px); top: 0;
+    transform-origin: 2px var(--ring-radius);
+    border-radius: 4px;
+    background: rgba(255,255,255,.75);
+    transition: background .15s, box-shadow .15s;
+}
+.scan-dash.active { background: #00eaff; box-shadow: 0 0 9px #00eaff; }
+.scan-face-guide {
+    position: absolute;
+    width: 92px; height: 122px;
+    left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    border: 2px solid rgba(0,234,255,.75);
+    border-radius: 48% 48% 44% 44%;
+    color: #d9fbff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 42px;
+    text-shadow: 0 0 10px #00eaff;
+    background: rgba(0,0,0,.12);
+}
+.scan-stage.scanning .scan-face-guide { animation: face-guide-pulse 1.2s ease-in-out infinite; }
+@keyframes face-guide-pulse { 50% { border-color: #00ff9d; box-shadow: 0 0 22px rgba(0,255,157,.65); } }
+
+.scan-progress {
+    width: min(320px, 80%);
+    height: 6px;
+    margin: 12px auto 0;
+    background: rgba(255,255,255,0.12);
+    border-radius: 999px;
+    overflow: hidden;
+}
+.scan-progress-bar {
+    width: 0;
+    height: 100%;
+    background: #00eaff;
+    transition: width 120ms linear;
+}
+</style>
+
 <script>
 document.addEventListener('DOMContentLoaded', () => {
 
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const captureBtn = document.getElementById('captureBtn');
+    const retryBtn = document.getElementById('retryBtn');
     const photoFileInput = document.getElementById('photoFileInput');
-    const photoInput = document.getElementById('photoData');
+    const instruction = document.getElementById('captureInstruction');
+    const thumbs = [document.getElementById('thumb0'), document.getElementById('thumb1'), document.getElementById('thumb2')];
+    const scanStage = document.querySelector('.scan-stage');
+    const scanRing = document.getElementById('scanRing');
 
     const matriculeInput = document.getElementById('matriculeInput');
     const filiereSelect = document.getElementById('filiereSelect');
     const anneeSelect = document.getElementById('anneeSelect');
+
+    // Étapes de capture, comme Face ID qui te fait bouger la tête.
+    const steps = ['Commencez au centre', 'Continuez le cercle lentement', 'Terminez le tour'];
+    let currentStep = 0;
+    let capturedShots = []; // dataURLs
+    let scanTimer = null;
+    let lastFrame = null;
+    let lastFacePoint = null;
+    let visitedSectors = new Set();
+    let pathSectors = [];
+    let lastSector = null;
+    let movementDirection = null;
+    let motionSamples = 0;
+    let lastMotionAt = 0;
+    const faceDetector = 'FaceDetector' in window ? new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
+    const sectorCount = 12;
+    for (let index = 0; index < 48; index++) {
+        const dash = document.createElement('span');
+        dash.className = 'scan-dash';
+        dash.dataset.sector = Math.floor(index / 4);
+        dash.style.transform = `rotate(${index * 7.5}deg) translateY(-50%)`;
+        scanRing.appendChild(dash);
+    }
+    const dashes = [...scanRing.querySelectorAll('.scan-dash')];
+
+    function updateRingRadius() {
+        scanRing.style.setProperty('--ring-radius', `${scanRing.clientHeight / 2}px`);
+    }
+    updateRingRadius();
+    window.addEventListener('resize', updateRingRadius);
+    const progressBar = document.createElement('div');
+    progressBar.className = 'scan-progress';
+    progressBar.innerHTML = '<div class="scan-progress-bar"></div>';
+    captureBtn.insertAdjacentElement('afterend', progressBar);
+    const progressBarFill = progressBar.firstElementChild;
+
+    function updateInstruction() {
+        if (currentStep >= steps.length) {
+            instruction.textContent = '✅ Tour complet détecté, prêt à valider';
+            captureBtn.classList.add('d-none');
+            retryBtn.classList.remove('d-none');
+        } else {
+            instruction.textContent = `${steps[currentStep]}. Bougez lentement la tête.`;
+        }
+    }
 
     // Supprimer accents
     function removeAccents(str) {
@@ -168,7 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Webcam
     const constraints = {
         video: {
-            facingMode: { ideal: "environment" },
+            facingMode: { ideal: "user" },
             width: { ideal: 1280 },
             height: { ideal: 720 }
         }
@@ -181,28 +321,201 @@ document.addEventListener('DOMContentLoaded', () => {
             // Si la caméra échoue (ex: pas de HTTPS), on montre le champ de fichier
             document.getElementById('fallbackCamera').classList.remove('d-none');
             captureBtn.classList.add('d-none');
+            instruction.classList.add('d-none');
             video.parentElement.innerHTML = '<div class="alert alert-secondary">Mode photo mobile activé</div>';
         });
 
-    // Capture
+    function captureCurrentFrame() {
+        if (!video.videoWidth || !video.videoHeight) return null;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        return canvas.toDataURL('image/jpeg', 0.92);
+    }
+
+    function captureAfterCompletedScan() {
+        let captures = 0;
+        const captureTimer = setInterval(() => {
+            const frame = captureCurrentFrame();
+            if (frame) {
+                capturedShots.push(frame);
+                thumbs[captures].style.backgroundImage = `url(${frame})`;
+                thumbs[captures].classList.add('filled');
+                captures++;
+            }
+            if (captures === 3) {
+                clearInterval(captureTimer);
+                currentStep = steps.length;
+                captureBtn.classList.add('d-none');
+                retryBtn.classList.remove('d-none');
+                instruction.textContent = '✅ Mouvement validé, 3 vues enregistrées';
+            }
+        }, 350);
+    }
+
+    function finishScan() {
+        clearInterval(scanTimer);
+        scanTimer = null;
+        scanStage.classList.remove('scanning');
+        captureBtn.disabled = false;
+        if (motionSamples >= 8) {
+            instruction.textContent = '✅ Mouvement validé, enregistrement des vues...';
+            progressBarFill.style.width = '100%';
+            captureAfterCompletedScan();
+        } else {
+            currentStep = 1;
+            instruction.textContent = 'Mouvement insuffisant. Recommencez en tournant lentement la tête.';
+            captureBtn.innerHTML = '<i class="fas fa-redo me-2"></i>REFAIRE LE SCAN';
+            return;
+        }
+    }
+
+    function markSector(sector) {
+        if (sector < 0 || sector >= sectorCount) return;
+        let accepted = false;
+        if (lastSector === null) {
+            lastSector = sector;
+            pathSectors = [sector];
+            accepted = true;
+        } else if (sector !== lastSector) {
+            const clockwise = (sector - lastSector + sectorCount) % sectorCount;
+            const counterClockwise = (lastSector - sector + sectorCount) % sectorCount;
+            if (movementDirection === null && (clockwise === 1 || counterClockwise === 1)) {
+                movementDirection = clockwise === 1 ? 1 : -1;
+            }
+            const forwardDistance = movementDirection === 1 ? clockwise : counterClockwise;
+            if (movementDirection !== null && forwardDistance >= 1 && forwardDistance <= 2) {
+                pathSectors.push(sector);
+                lastSector = sector;
+                visitedSectors.add(sector);
+                accepted = true;
+            }
+        }
+        if (accepted) {
+            dashes.forEach(dash => {
+                if (Number(dash.dataset.sector) === sector) dash.classList.add('active');
+            });
+        }
+        progressBarFill.style.width = `${Math.min(100, (pathSectors.length / 8) * 100)}%`;
+    }
+
+    function updateFacePosition(box) {
+        const x = (box.x + box.width / 2) / video.videoWidth - .5;
+        const y = (box.y + box.height / 2) / video.videoHeight - .5;
+        const distance = Math.hypot(x, y);
+        if (distance > .08) {
+            const angle = (Math.atan2(y, x) * 180 / Math.PI + 450) % 360;
+            markSector(Math.floor(angle / 30));
+        }
+        return { x, y };
+    }
+
+    function detectPixelMotion() {
+        if (!video.videoWidth) return null;
+        const sample = document.createElement('canvas');
+        sample.width = 64; sample.height = 48;
+        const context = sample.getContext('2d', { willReadFrequently: true });
+        context.drawImage(video, 0, 0, sample.width, sample.height);
+        const current = context.getImageData(0, 0, sample.width, sample.height).data;
+        if (!lastFrame) { lastFrame = current; return null; }
+        let energy = 0; let weightedX = 0; let weightedY = 0;
+        for (let index = 0; index < current.length; index += 4) {
+            const difference = Math.abs(current[index] - lastFrame[index]) + Math.abs(current[index + 1] - lastFrame[index + 1]) + Math.abs(current[index + 2] - lastFrame[index + 2]);
+            if (difference > 45) {
+                const pixel = index / 4;
+                const x = pixel % sample.width; const y = Math.floor(pixel / sample.width);
+                energy += difference; weightedX += x * difference; weightedY += y * difference;
+            }
+        }
+        lastFrame = current;
+        if (energy < 3500) return null;
+        return {
+            x: weightedX / energy / sample.width - .5,
+            y: weightedY / energy / sample.height - .5,
+            energy
+        };
+    }
+
+    async function trackScanFrame() {
+        if (!scanTimer) return;
+        const motion = detectPixelMotion();
+        let point = null;
+        if (faceDetector) {
+            try {
+                const faces = await faceDetector.detect(video);
+                if (faces.length) point = updateFacePosition(faces[0].boundingBox);
+            } catch (error) { point = null; }
+        }
+        if (!point) point = motion;
+        if (motion && performance.now() - lastMotionAt > 260) {
+            motionSamples++;
+            lastMotionAt = performance.now();
+            const motionAngle = (Math.atan2(motion.y, motion.x) * 180 / Math.PI + 450) % 360;
+            markSector(Math.floor(motionAngle / 30));
+        }
+        if (point && lastFacePoint && (Math.abs(point.x - lastFacePoint.x) + Math.abs(point.y - lastFacePoint.y)) > .025) {
+            const angle = (Math.atan2(point.y, point.x) * 180 / Math.PI + 450) % 360;
+            markSector(Math.floor(angle / 30));
+        }
+        if (point) lastFacePoint = point;
+    }
+
+    // Un seul scan continu, comme l'assistant Face ID. Les images sont
+    // extraites automatiquement du flux et ne sont jamais choisies à la main.
     captureBtn.onclick = () => {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             alert('Votre appareil ne prend pas en charge la capture en direct. Utilisez le champ de fichier ci-dessous pour sélectionner une photo.');
             return;
         }
+        if (scanTimer || !video.videoWidth) return;
 
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext('2d').drawImage(video, 0, 0);
+        capturedShots = [];
+        currentStep = 0;
+        visitedSectors = new Set();
+        pathSectors = [];
+        lastSector = null;
+        movementDirection = null;
+        motionSamples = 0;
+        lastMotionAt = 0;
+        lastFacePoint = null;
+        lastFrame = null;
+        dashes.forEach(dash => dash.classList.remove('active'));
+        scanStage.classList.add('scanning');
+        captureBtn.disabled = true;
+        captureBtn.innerHTML = '<i class="fas fa-sync fa-spin me-2"></i>SCAN EN COURS';
+        instruction.textContent = 'Placez votre visage au centre, puis faites lentement le tour du cercle';
+        scanTimer = setInterval(trackScanFrame, 180);
+        setTimeout(() => { if (scanTimer) finishScan(); }, 15000);
+    };
 
-        photoInput.value = canvas.toDataURL('image/jpeg');
-        alert('Photo capturee !');
+    retryBtn.onclick = () => {
+        currentStep = 0;
+        capturedShots = [];
+        clearInterval(scanTimer);
+        scanTimer = null;
+        visitedSectors = new Set();
+        pathSectors = [];
+        lastSector = null;
+        movementDirection = null;
+        motionSamples = 0;
+        lastMotionAt = 0;
+        lastFacePoint = null;
+        lastFrame = null;
+        scanStage.classList.remove('scanning');
+        progressBarFill.style.width = '0';
+        captureBtn.disabled = false;
+        captureBtn.innerHTML = '<i class="fas fa-play me-2"></i>DÉMARRER LE SCAN';
+        thumbs.forEach(t => { t.style.backgroundImage = ''; t.classList.remove('filled'); });
+        dashes.forEach(dash => dash.classList.remove('active'));
+        captureBtn.classList.remove('d-none');
+        retryBtn.classList.add('d-none');
+        updateInstruction();
     };
 
     photoFileInput.addEventListener('change', () => {
-        if (photoFileInput.files.length > 0) {
-            photoInput.value = '';
-        }
+        // Mode secours (pas de webcam) : on vide les captures live, on se
+        // basera sur les fichiers sélectionnés (1 à 3) lors de l'envoi.
+        capturedShots = [];
     });
 
     // Matricule
@@ -277,14 +590,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const formData = new FormData(e.target);
 
-        if (photoInput.value) {
-            const res = await fetch(photoInput.value);
-            const blob = await res.blob();
-            formData.set('photo', blob, 'capture.jpg');
+        if (capturedShots.length > 0) {
+            for (let i = 0; i < capturedShots.length; i++) {
+                if (!capturedShots[i]) continue;
+                const res = await fetch(capturedShots[i]);
+                const blob = await res.blob();
+                formData.append('photos', blob, `capture_${i}.jpg`);
+            }
         } else if (photoFileInput.files.length > 0) {
-            formData.set('photo', photoFileInput.files[0]);
+            Array.from(photoFileInput.files).slice(0, 3).forEach((file, i) => {
+                formData.append('photos', file, file.name || `capture_${i}.jpg`);
+            });
         } else {
-            alert('Veuillez capturer ou sélectionner une photo avant de valider.');
+            alert('Veuillez capturer exactement 3 vues: face, gauche et droite.');
             return;
         }
 
@@ -305,6 +623,8 @@ document.addEventListener('DOMContentLoaded', () => {
             alert(data.error);
         }
     };
+
+    updateInstruction();
 
 });
 </script>

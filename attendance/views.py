@@ -5,6 +5,7 @@ from django.contrib.auth.decorators import login_required
 from django.utils import timezone
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
+from django.contrib.sessions.models import Session
 from django.conf import settings
 import csv
 import os
@@ -17,6 +18,13 @@ import glob
 import subprocess
 import sys
 import tempfile
+import io
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 from deepface import DeepFace
 try:
     from PIL import Image, ImageOps
@@ -25,7 +33,7 @@ except ImportError:
 from .models import Etudiant, Filiere, Annee, Groupe, Matiere, Presence, Rapport
 from datetime import timedelta, datetime
 from django.http import StreamingHttpResponse, HttpResponseForbidden, HttpResponse
-from .utils.face_utils import generate_embedding_from_file, process_frame
+from .utils.face_utils import generate_embedding_from_files, process_frame, SpoofError, ImageQualityError
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib import colors
@@ -52,9 +60,20 @@ def capture_photo(request):
         annee_id = request.POST.get('annee')
         groupe_id = request.POST.get('groupe')
 
-        photo_data = request.FILES.get('photo')
-        if not photo_data:
+        # 'photos' = plusieurs captures (mode multi-angles façon Face ID).
+        # On garde 'photo' (singulier) en repli pour compatibilité si jamais
+        # un vieux client n'envoie qu'une seule image.
+        photos_data = request.FILES.getlist('photos')
+        if not photos_data:
+            single = request.FILES.get('photo')
+            if single:
+                photos_data = [single]
+        if not photos_data:
             return JsonResponse({'error': 'Aucune photo'}, status=400)
+        if len(photos_data) != 3:
+            return JsonResponse({
+                'error': 'Pour une empreinte type Face ID, capturez exactement 3 vues: face, gauche et droite.'
+            }, status=400)
 
         try:
             filiere = Filiere.objects.get(id=filiere_id)
@@ -69,32 +88,49 @@ def capture_photo(request):
             filiere=filiere,
         ).first()
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
-            for chunk in photo_data.chunks():
-                tmp_file.write(chunk)
-            tmp_file.flush()
-            tmp_path = tmp_file.name # Récupérer le chemin du fichier temporaire
+        tmp_paths = []
+        try:
+            for photo_data in photos_data:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+                    for chunk in photo_data.chunks():
+                        tmp_file.write(chunk)
+                    tmp_file.flush()
+                    tmp_path = tmp_file.name
+                tmp_paths.append(tmp_path)
 
-            # Prétraitement : Correction de l'orientation mobile (EXIF) et redimensionnement
-            if Image:
-                try:
-                    with Image.open(tmp_path) as img_pil:
-                        img_pil = ImageOps.exif_transpose(img_pil)  # Redresse l'image si elle est sur le côté
-                        img_pil = img_pil.convert('RGB')
-                        img_pil.thumbnail((1000, 1000))  # Taille optimale pour DeepFace
-                        img_pil.save(tmp_path, quality=90)
-                except Exception as e:
-                    print(f"Erreur de prétraitement Image : {e}")
+                # Prétraitement : Correction de l'orientation mobile (EXIF) et redimensionnement
+                if Image:
+                    try:
+                        with Image.open(tmp_path) as img_pil:
+                            img_pil = ImageOps.exif_transpose(img_pil)  # Redresse l'image si elle est sur le côté
+                            img_pil = img_pil.convert('RGB')
+                            img_pil.thumbnail((1000, 1000))  # Taille optimale pour DeepFace
+                            img_pil.save(tmp_path, quality=90)
+                    except Exception as e:
+                        print(f"Erreur de prétraitement Image : {e}")
 
-            embedding = generate_embedding_from_file(tmp_path)
-            # Le fichier temporaire sera automatiquement supprimé à la sortie du bloc 'with'
-            # si delete=True (par défaut). Si delete=False, il faut le supprimer manuellement.
-            # Puisque nous avons delete=False, nous devons le supprimer explicitement.
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            try:
+                embedding, nb_reussies, nb_total = generate_embedding_from_files(tmp_paths)
+            except SpoofError as e:
+                return JsonResponse({
+                    'error': f"Anti-spoofing : {e} Recommencez avec la caméra en direct, pas une photo/écran."
+                }, status=400)
+            except ImageQualityError as e:
+                return JsonResponse({'error': f'Qualité de capture insuffisante : {e}'}, status=400)
+        finally:
+            for p in tmp_paths:
+                if os.path.exists(p):
+                    os.remove(p)
 
         if embedding is None:
-            return JsonResponse({'error': 'Visage non détecté'}, status=400)
+            return JsonResponse({'error': 'Aucun visage valide détecté dans les captures.'}, status=400)
+
+        # La première photo capturée sert d'aperçu visuel (admin), la
+        # reconnaissance elle-même repose uniquement sur l'embedding moyen.
+        preview_photo = photos_data[0]
+        message_suffix = ''
+        if nb_total > 1:
+            message_suffix = f' ({nb_reussies}/{nb_total} captures utilisées pour la signature)'
 
         if deja:
             deja.nom = nom
@@ -104,10 +140,10 @@ def capture_photo(request):
             deja.filiere = filiere
             deja.annee = annee
             deja.groupe = groupe
-            deja.photo = photo_data
+            deja.photo = preview_photo
             deja.save()
             deja.save_embedding(embedding)
-            return JsonResponse({'success': True, 'message': 'Étudiant mis à jour avec succès.'})
+            return JsonResponse({'success': True, 'message': f'Étudiant mis à jour avec succès.{message_suffix}'})
 
         etudiant = Etudiant.objects.create(
             nom=nom,
@@ -117,12 +153,13 @@ def capture_photo(request):
             filiere=filiere,
             annee=annee,
             groupe=groupe,
-            photo=photo_data,
+            photo=preview_photo,
         )
         etudiant.save_embedding(embedding)
-        return JsonResponse({'success': True, 'message': f'Étudiant enregistré avec matricule {etudiant.matricule}.'})
+        return JsonResponse({'success': True, 'message': f'Étudiant enregistré avec matricule {etudiant.matricule}.{message_suffix}'})
 
     return JsonResponse({'error': 'Méthode non autorisée'}, status=405)
+
 
 
 @login_required
@@ -140,9 +177,28 @@ def mobile_pointage_capture(request):
             return JsonResponse({'error': 'Matière invalide.'}, status=400)
 
         image_bytes = photo_data.read()
-        frame_array = np.frombuffer(image_bytes, np.uint8)
-        frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
-        
+
+        # Correction d'orientation EXIF : une photo prise au téléphone n'est
+        # souvent pas physiquement pivotée, l'orientation est juste une
+        # métadonnée. cv2.imdecode l'ignore et décode l'image de travers,
+        # ce qui fait échouer la détection de visage. On repasse par PIL
+        # pour la redresser, exactement comme à l'enrôlement (capture_photo).
+        frame = None
+        if Image:
+            try:
+                with Image.open(io.BytesIO(image_bytes)) as img_pil:
+                    img_pil = ImageOps.exif_transpose(img_pil)
+                    img_pil = img_pil.convert('RGB')
+                    frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+            except Exception as e:
+                print(f"Erreur de prétraitement mobile : {e}")
+
+        if frame is None:
+            # Repli si PIL indisponible ou a échoué : décodage brut (sans
+            # correction EXIF, comme avant).
+            frame_array = np.frombuffer(image_bytes, np.uint8)
+            frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+
         # Redimensionner l'image si elle vient d'un smartphone (souvent trop grande pour DeepFace)
         if frame is not None and frame.shape[1] > 1000:
             scaling_factor = 1000 / frame.shape[1]
@@ -250,24 +306,40 @@ def dashboard_admin(request):
     import sys
     import django
     import platform
-    import psutil
-    
+
     # Récupération des métriques système
-    try:
-        # Utilisation CPU (si psutil disponible)
-        cpu_usage = psutil.cpu_percent(interval=1)
-        # Mémoire
-        memory = psutil.virtual_memory()
-        memory_usage = memory.percent
-        # Disque
-        disk = psutil.disk_usage('/')
-        disk_usage = f"{disk.percent}%"
-    except ImportError:
-        # Fallback si psutil n'est pas installé
+    if psutil is not None:
+        try:
+            cpu_usage = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+            memory_usage = memory.percent
+            disk = psutil.disk_usage('/')
+            disk_usage = f"{disk.percent}%"
+            disk_percent = float(disk.percent)
+        except Exception:
+            cpu_usage = 0
+            memory_usage = 0
+            disk_usage = "N/A"
+            disk_percent = 0
+    else:
         cpu_usage = 0
         memory_usage = 0
         disk_usage = "N/A"
-    
+        disk_percent = 0
+
+    active_sessions = Session.objects.filter(expire_date__gt=timezone.now()).count()
+    if psutil is not None and disk_usage != 'N/A':
+        performance_score = max(0, min(100, round(100 - (cpu_usage * 0.45 + memory_usage * 0.35 + disk_percent * 0.20), 1)))
+    else:
+        performance_score = 100
+
+    if memory_usage >= 90 or cpu_usage >= 90 or disk_percent >= 90:
+        security_status = 'CRITICAL'
+    elif memory_usage >= 75 or cpu_usage >= 75 or disk_percent >= 75:
+        security_status = 'WARNING'
+    else:
+        security_status = 'OK'
+
     return render(request, 'attendance/dashboard_admin.html', {
         'total_etudiants': Etudiant.objects.count(),
         'total_filieres': Filiere.objects.count(),
@@ -281,8 +353,9 @@ def dashboard_admin(request):
         'cpu_usage': f"{cpu_usage:.1f}%",
         'memory_usage': f"{memory_usage:.1f}%",
         'disk_usage': disk_usage,
-        'active_sessions': 1,  # À implémenter avec django-sessions
-        'performance_score': "95%",  # Métrique calculée
+        'active_sessions': active_sessions,
+        'performance_score': f"{performance_score:.1f}%",
+        'security_status': security_status,
     })
 
 @csrf_exempt
@@ -417,12 +490,13 @@ def check_integrity(request):
                 issues.append(f"{etudiants_sans_photo} étudiants sans photo")
 
             # Vérifier l'espace disque
-            try:
-                disk = psutil.disk_usage('/')
-                if disk.percent > 90:
-                    issues.append(f"Espace disque critique: {disk.percent}% utilisé")
-            except:
-                pass
+            if psutil is not None:
+                try:
+                    disk = psutil.disk_usage('/')
+                    if disk.percent > 90:
+                        issues.append(f"Espace disque critique: {disk.percent}% utilisé")
+                except Exception:
+                    pass
             
             if not issues:
                 return JsonResponse({
@@ -521,7 +595,16 @@ frame_queue = queue.Queue(maxsize=1)  # Dernière frame uniquement
 class SmartCamera:
     def __init__(self):
         self.video = None
-        self.backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_VFW, cv2.CAP_ANY]
+        # Backends spécifiques à l'OS en priorité, CAP_ANY en repli universel.
+        # Avant : uniquement CAP_DSHOW/CAP_MSMF/CAP_VFW (Windows), donc échec
+        # systématique sur Linux/Mac même avec une webcam qui fonctionne.
+        if sys.platform.startswith('win'):
+            self.backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
+        elif sys.platform == 'darwin':
+            self.backends = [cv2.CAP_AVFOUNDATION, cv2.CAP_ANY]
+        else:
+            self.backends = [cv2.CAP_V4L2, cv2.CAP_ANY]
+
         for backend in self.backends:
             try:
                 capture = cv2.VideoCapture(0, backend)
@@ -565,11 +648,21 @@ class SmartCamera:
                     color = (0, 255, 0)  # Vert
                     cv2.putText(frame, text, (30, 60),
                                 cv2.FONT_HERSHEY_DUPLEX, 1.2, color, 3)
-                elif statut in ['absent', 'inconnu']:
-                    text = "Non reconnu"
+                elif statut == 'spoof':
+                    text = "TENTATIVE DE FRAUDE (photo/écran)"
+                    color = (0, 0, 255)  # Rouge
+                    cv2.putText(frame, text, (30, 60),
+                                cv2.FONT_HERSHEY_DUPLEX, 1.0, color, 3)
+                elif statut == 'inconnu':
+                    text = "Visage non reconnu"
                     color = (0, 0, 255)  # Rouge
                     cv2.putText(frame, text, (30, 60),
                                 cv2.FONT_HERSHEY_DUPLEX, 1.2, color, 3)
+                elif statut == 'aucun_visage':
+                    text = "Aucun visage détecté"
+                    color = (0, 165, 255)  # Orange
+                    cv2.putText(frame, text, (30, 60),
+                                cv2.FONT_HERSHEY_DUPLEX, 1.0, color, 3)
 
                 # Indicateur pointage actif
                 cv2.putText(frame, "POINTAGE ACTIF", (30, 450),

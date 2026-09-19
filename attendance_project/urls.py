@@ -4,6 +4,6 @@ from django.conf import settings
 from django.conf.urls.static import static
 
 urlpatterns = [
+    path('', include('attendance.urls')),  # doit être avant /admin/ pour éviter le conflit
     path('admin/', admin.site.urls),
-    path('', include('attendance.urls')),  # ou 'attendance/' selon ton choix
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
