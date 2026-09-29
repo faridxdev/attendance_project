@@ -34,7 +34,7 @@ except ImportError:
 from .models import Etudiant, Filiere, Annee, Groupe, Matiere, Presence, Rapport
 from datetime import timedelta, datetime
 from django.http import StreamingHttpResponse, HttpResponseForbidden, HttpResponse
-from .utils.face_utils import generate_embedding_from_files, process_frame, SpoofError, ImageQualityError
+from .utils.face_utils import generate_embedding_from_files, process_frame, process_frame_many, SpoofError, ImageQualityError
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib import colors
@@ -201,15 +201,26 @@ def mobile_pointage_capture(request):
             frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
 
         # Redimensionner l'image si elle vient d'un smartphone (souvent trop grande pour DeepFace)
-        if frame is not None and frame.shape[1] > 1000:
-            scaling_factor = 1000 / frame.shape[1]
+        if frame is not None and frame.shape[1] > 1280:
+            scaling_factor = 1280 / frame.shape[1]
             frame = cv2.resize(frame, None, fx=scaling_factor, fy=scaling_factor)
 
         if frame is None:
             return JsonResponse({'error': 'Image invalide.'}, status=400)
 
-        statut, nom, prenom, matricule = process_frame(frame.copy(), matiere_id=matiere_id)
-        return JsonResponse({'success': True, 'statut': statut, 'nom': nom, 'prenom': prenom, 'matricule': matricule})
+        visages = process_frame_many(frame.copy(), matiere_id=matiere_id)
+        reconnus = [visage for visage in visages if visage['statut'] == 'présent']
+        statut = 'présent' if reconnus else ('inconnu' if visages else 'aucun_visage')
+        premier_reconnu = reconnus[0] if reconnus else {}
+        return JsonResponse({
+            'success': True,
+            'statut': statut,
+            'nom': premier_reconnu.get('nom'),
+            'prenom': premier_reconnu.get('prenom'),
+            'matricule': premier_reconnu.get('matricule'),
+            'visages': visages,
+            'presences_creees': sum(1 for visage in reconnus if visage['presence_creee']),
+        })
 
     return JsonResponse({'error': 'Méthode non autorisée'}, status=405)
 
@@ -602,7 +613,12 @@ class SmartCamera:
         self.analysis_lock = threading.Lock()
         self.analysis_in_progress = False
         preferred_index = int(os.getenv('CAMERA_INDEX', '1'))
-        camera_indices = list(dict.fromkeys([preferred_index, 0]))
+        # Camo and other virtual/external webcams usually appear after the
+        # built-in camera. Try the preferred and remaining external indices
+        # before falling back to the PC camera at index 0.
+        camera_indices = list(dict.fromkeys(
+            [preferred_index, *range(1, 6), 0]
+        ))
         # Backends spécifiques à l'OS en priorité, CAP_ANY en repli universel.
         # Avant : uniquement CAP_DSHOW/CAP_MSMF/CAP_VFW (Windows), donc échec
         # systématique sur Linux/Mac même avec une webcam qui fonctionne.
@@ -620,10 +636,18 @@ class SmartCamera:
                 try:
                     capture = cv2.VideoCapture(camera_index, backend)
                     if capture.isOpened():
-                        success, test_frame = capture.read()
-                        if success and test_frame is not None and float(np.mean(test_frame)) > 2.0:
+                        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        test_frame = None
+                        for _ in range(8):
+                            success, candidate_frame = capture.read()
+                            if (success and candidate_frame is not None
+                                    and candidate_frame.size
+                                    and float(np.mean(candidate_frame)) > 2.0):
+                                test_frame = candidate_frame
+                                break
+                        if test_frame is not None:
                             self.video = capture
-                            print(f"Caméra sélectionnée: index={camera_index}, backend={backend}")
+                            print(f"Webcam sélectionnée: index={camera_index}, backend={backend}")
                             break
                         capture.release()
                     capture.release()

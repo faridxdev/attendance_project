@@ -1,12 +1,12 @@
 {% extends 'attendance/base.html' %}
 
-{% block title %}Tableau de bord - Instructeur{% endblock %}
+{% block title %}Tableau de bord - Enseignant{% endblock %}
 
 {% block content %}
 <div class="container-fluid p-4" style="background: #0a0b10; min-height: 100vh;">
     <nav class="navbar navbar-expand-lg glass-panel mb-4 p-3">
         <div class="container-fluid">
-            <span class="navbar-brand fw-bold text-info"><i class="fas fa-eye me-2"></i>POSTE INSTRUCTEUR</span>
+            <span class="navbar-brand fw-bold text-info"><i class="fas fa-eye me-2"></i>POSTE ENSEIGNANT</span>
             <div class="ms-auto d-flex align-items-center">
                 <span class="me-3 text-light opacity-75 small">{{ user.nom }} {{ user.prenom }}</span>
                 <a href="{% url 'attendance:logout' %}" class="btn btn-neon-red btn-sm">Déconnexion</a>
@@ -101,8 +101,9 @@
             <div id="videoPlaceholder" class="video-placeholder rounded border border-info">
                 <i class="fas fa-video-slash me-2"></i>Flux webcam en attente
             </div>
-            <img id="videoStream" width="640" height="480" class="img-fluid rounded border border-info d-none" alt="Flux webcam en direct">
+            <video id="videoStream" autoplay muted playsinline width="640" class="img-fluid rounded border border-info d-none"></video>
             <canvas id="scanCanvas" style="display:none;"></canvas>
+            <canvas id="faceOverlayCanvas" class="face-overlay-canvas"></canvas>
             <div id="overlayText" class="position-absolute top-50 start-50 translate-middle text-white fw-bold fs-3 bg-dark bg-opacity-50 p-3 rounded d-none">
                 En attente...
             </div>
@@ -178,13 +179,20 @@
     #overlayText { font-family: 'Orbitron', sans-serif; pointer-events: none; }
     .video-placeholder {
         width: 640px;
-        height: 480px;
+        aspect-ratio: 16 / 9;
         max-width: 100%;
         display: flex;
         align-items: center;
         justify-content: center;
         color: rgba(255, 255, 255, 0.65);
         background: rgba(0, 0, 0, 0.28);
+    }
+    .face-overlay-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
     }
 </style>
 
@@ -202,14 +210,22 @@ const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const statusMsg = document.getElementById('statusMsg');
 const stream = document.getElementById('videoStream');
+const scanCanvas = document.getElementById('scanCanvas');
+const scanContext = scanCanvas.getContext('2d');
+const faceOverlayCanvas = document.getElementById('faceOverlayCanvas');
+const faceOverlayContext = faceOverlayCanvas.getContext('2d');
 const videoPlaceholder = document.getElementById('videoPlaceholder');
 const overlay = document.getElementById('overlayText');
 const matiereSelect = document.getElementById('matiereSelect');
 const activityLogBody = document.getElementById('activityLogBody');
 const presentsCount = document.getElementById('presentsCount');
 let activityRefreshTimer = null;
+let cameraStream = null;
+let scanTimer = null;
+let scanRequestInFlight = false;
 
-stream.onload = () => {
+stream.onloadedmetadata = async () => {
+    try { await stream.play(); } catch (error) { /* Playback may already have started. */ }
     videoPlaceholder.classList.add('d-none');
     stream.classList.remove('d-none');
     overlay.classList.add('d-none');
@@ -217,7 +233,7 @@ stream.onload = () => {
 stream.onerror = () => {
     stream.classList.add('d-none');
     videoPlaceholder.classList.remove('d-none');
-    overlay.textContent = 'Flux Camo indisponible';
+    overlay.textContent = 'Webcam indisponible';
     overlay.classList.remove('d-none');
 };
 
@@ -250,6 +266,108 @@ async function refreshActivityLog() {
     }
 }
 
+async function startBrowserCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('La caméra du navigateur nécessite HTTPS ou localhost.');
+    }
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+            facingMode: {ideal: 'user'},
+            width: {ideal: 1280},
+            height: {ideal: 720}
+        },
+        audio: false
+    });
+    stream.srcObject = cameraStream;
+    await new Promise((resolve, reject) => {
+        stream.onloadedmetadata = resolve;
+        stream.onerror = () => reject(new Error('Impossible de démarrer la webcam.'));
+    });
+    await stream.play();
+    const captureScale = Math.min(1, 1280 / stream.videoWidth);
+    scanCanvas.width = Math.round(stream.videoWidth * captureScale);
+    scanCanvas.height = Math.round(stream.videoHeight * captureScale);
+    faceOverlayCanvas.width = scanCanvas.width;
+    faceOverlayCanvas.height = scanCanvas.height;
+    videoPlaceholder.classList.add('d-none');
+    stream.classList.remove('d-none');
+    overlay.classList.add('d-none');
+    scanTimer = window.setInterval(sendBrowserScanFrame, 1500);
+    await sendBrowserScanFrame();
+}
+
+function stopBrowserCamera() {
+    if (scanTimer) window.clearInterval(scanTimer);
+    scanTimer = null;
+    if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+    stream.srcObject = null;
+    stream.classList.add('d-none');
+    videoPlaceholder.classList.remove('d-none');
+    scanRequestInFlight = false;
+}
+
+async function sendBrowserScanFrame() {
+    if (!cameraStream || scanRequestInFlight || stream.readyState < 2 || !matiereSelect.value) return;
+    scanRequestInFlight = true;
+    scanContext.drawImage(stream, 0, 0, scanCanvas.width, scanCanvas.height);
+    const image = await new Promise(resolve => scanCanvas.toBlob(resolve, 'image/jpeg', 0.82));
+    if (!image) { scanRequestInFlight = false; return; }
+
+    const payload = new FormData();
+    payload.append('photo', image, 'presence.jpg');
+    payload.append('matiere_id', matiereSelect.value);
+    try {
+        const response = await fetch("{% url 'attendance:mobile_pointage' %}", {
+            method: 'POST',
+            headers: {'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value},
+            body: payload
+        });
+        const result = await response.json();
+        renderFaceResults(result.visages || []);
+        const recognizedNames = (result.visages || [])
+            .filter(face => face.statut === 'présent')
+            .map(face => `${face.prenom} ${face.nom}`);
+        const messages = {
+            'présent': `Présents détectés (${recognizedNames.length}) : ${recognizedNames.join(', ')}`,
+            'inconnu': `Visages détectés : ${(result.visages || []).length}, aucun reconnu`,
+            'aucun_visage': 'Recherche de visages dans la salle...',
+            'spoof': 'Visage rejeté',
+            'erreur': 'Erreur pendant l’analyse'
+        };
+        overlay.textContent = messages[result.statut] || 'Scan actif';
+        overlay.classList.remove('d-none');
+        if (result.statut === 'présent') {
+            await refreshActivityLog();
+            window.setTimeout(() => overlay.classList.add('d-none'), 1800);
+        }
+    } catch (error) {
+        overlay.textContent = 'Serveur de reconnaissance indisponible';
+        overlay.classList.remove('d-none');
+    } finally {
+        scanRequestInFlight = false;
+    }
+}
+
+function renderFaceResults(faces) {
+    faceOverlayContext.clearRect(0, 0, faceOverlayCanvas.width, faceOverlayCanvas.height);
+    faces.forEach(face => {
+        const area = face.facial_area;
+        if (!area || !Number.isFinite(area.x) || !Number.isFinite(area.y)) return;
+        const width = area.w || area.width || 0;
+        const height = area.h || area.height || 0;
+        const recognized = face.statut === 'présent';
+        const label = recognized ? `${face.prenom} ${face.nom}` : 'Inconnu';
+        faceOverlayContext.strokeStyle = recognized ? '#00ff9d' : '#ff5364';
+        faceOverlayContext.lineWidth = Math.max(2, faceOverlayCanvas.width / 400);
+        faceOverlayContext.strokeRect(area.x, area.y, width, height);
+        faceOverlayContext.font = `bold ${Math.max(14, faceOverlayCanvas.width / 45)}px sans-serif`;
+        const labelY = Math.max(18, area.y - 6);
+        faceOverlayContext.fillStyle = recognized ? '#00ff9d' : '#ff5364';
+        faceOverlayContext.fillText(label, area.x, labelY);
+    });
+}
+
 async function togglePointage(action) {
     const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
     const matiereId = matiereSelect.value;
@@ -271,19 +389,26 @@ async function togglePointage(action) {
             overlay.textContent = 'Connexion à la webcam...';
             overlay.classList.remove('d-none');
             videoPlaceholder.classList.remove('d-none');
-            stream.removeAttribute('src');
-            stream.classList.add('d-none');
-            window.setTimeout(() => {
-                stream.src = "{% url 'attendance:video_feed' %}?t=" + Date.now();
-            }, 50);
-            await refreshActivityLog();
-            activityRefreshTimer = window.setInterval(refreshActivityLog, 2500);
+            try {
+                await startBrowserCamera();
+                await refreshActivityLog();
+                activityRefreshTimer = window.setInterval(refreshActivityLog, 2500);
+            } catch (error) {
+                stopBrowserCamera();
+                overlay.textContent = error.message || 'Webcam indisponible';
+                overlay.classList.remove('d-none');
+                statusMsg.innerHTML = 'ÉTAT DU SYSTÈME : <span class="text-danger fw-bold">ERREUR CAMÉRA</span>';
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                await fetch("{% url 'attendance:stop_pointage' %}", {
+                    method: 'POST',
+                    headers: {'X-CSRFToken': csrftoken}
+                });
+            }
         } else {
             if (activityRefreshTimer) window.clearInterval(activityRefreshTimer);
             activityRefreshTimer = null;
-            stream.removeAttribute('src');
-            stream.classList.add('d-none');
-            videoPlaceholder.classList.remove('d-none');
+            stopBrowserCamera();
             overlay.textContent = 'En attente...';
             overlay.classList.remove('d-none');
         }

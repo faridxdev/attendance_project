@@ -182,6 +182,121 @@ def process_frame(frame: np.ndarray, matiere_id=None) -> tuple:
         return 'erreur', None, None, None
 
 
+def _assign_faces_to_students(face_embeddings, etudiants):
+    """Associe les visages aux étudiants, sans attribuer un étudiant deux fois par frame."""
+    candidates = []
+    for face_index, face_embedding in enumerate(face_embeddings):
+        face_norm = np.linalg.norm(face_embedding)
+        if face_norm == 0:
+            continue
+        for etudiant in etudiants:
+            student_embedding = etudiant.get_embedding()
+            if student_embedding is None or student_embedding.shape != face_embedding.shape:
+                continue
+            student_norm = np.linalg.norm(student_embedding)
+            if student_norm == 0:
+                continue
+            distance = 1 - np.dot(face_embedding, student_embedding) / (face_norm * student_norm)
+            if distance < COSINE_THRESHOLD:
+                candidates.append((float(distance), face_index, etudiant))
+
+    assignments = {}
+    assigned_student_ids = set()
+    for _distance, face_index, etudiant in sorted(candidates, key=lambda item: item[0]):
+        if face_index in assignments or etudiant.pk in assigned_student_ids:
+            continue
+        assignments[face_index] = etudiant
+        assigned_student_ids.add(etudiant.pk)
+    return assignments
+
+
+def process_frame_many(frame: np.ndarray, matiere_id=None) -> list[dict]:
+    """Détecte et reconnaît chaque visage présent dans une image de salle."""
+    if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+        return []
+    if frame.ndim != 3 or frame.shape[0] < 48 or frame.shape[1] < 48:
+        return []
+
+    try:
+        detected_faces = DeepFace.represent(
+            img_path=frame,
+            model_name=MODEL_NAME,
+            detector_backend=DETECTOR_BACKENDS[0],
+            enforce_detection=False,
+            anti_spoofing=False,
+        ) or []
+    except Exception as exc:
+        if "face could not be detected" not in str(exc).lower():
+            print(f"Erreur détection des visages : {exc}")
+        return []
+
+    face_embeddings = []
+    valid_faces = []
+    for face in detected_faces:
+        if not _valid_face_result(face):
+            continue
+        face_embeddings.append(np.asarray(face['embedding'], dtype=np.float32))
+        valid_faces.append(face)
+
+    if not face_embeddings:
+        return []
+
+    etudiants = list(
+        Etudiant.objects.filter(actif=True).exclude(embedding__isnull=True)
+    )
+    assignments = _assign_faces_to_students(face_embeddings, etudiants)
+    today = timezone.now().date()
+    matiere = None
+    if matiere_id:
+        try:
+            matiere = Matiere.objects.get(id=matiere_id)
+        except Matiere.DoesNotExist:
+            pass
+
+    recognitions = []
+    for face_index, face in enumerate(valid_faces):
+        etudiant = assignments.get(face_index)
+        if etudiant is None:
+            recognitions.append({
+                'statut': 'inconnu',
+                'nom': None,
+                'prenom': None,
+                'matricule': None,
+                'facial_area': face.get('facial_area'),
+                'presence_creee': False,
+            })
+            continue
+
+        _presence, created = Presence.objects.get_or_create(
+            etudiant=etudiant,
+            matiere=matiere,
+            date=today,
+            defaults={
+                'annee': etudiant.annee,
+                'groupe': etudiant.groupe,
+                'statut': 'présent',
+                'heure': timezone.now().time(),
+                'reconnu_par': None,
+            },
+        )
+        recognitions.append({
+            'statut': 'présent',
+            'nom': etudiant.nom,
+            'prenom': etudiant.prenom,
+            'matricule': etudiant.matricule,
+            'facial_area': face.get('facial_area'),
+            'presence_creee': created,
+        })
+
+    return recognitions
+
+
+def _valid_face_result(face):
+    """Ignore les résultats MTCNN qui représentent l'image entière, pas un visage."""
+    embedding = face.get('embedding')
+    return face.get('face_confidence', 1.0) > 0 and embedding is not None and len(embedding) > 0
+
+
 def generate_embedding_from_file(image_path):
     """Utilisée pour une capture unique : exige un visage net et réel."""
     embedding, _confidence, spoof_detected = _extract_embedding(
