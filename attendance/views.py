@@ -885,6 +885,10 @@ def rapports_view(request):
                 date_debut = datetime.strptime(date_debut_str, '%Y-%m-%d').date()
             except ValueError:
                 date_debut = today
+        elif not date_fin_str:
+            # À l'ouverture sans filtre, afficher l'historique disponible
+            # plutôt que seulement aujourd'hui (souvent vide en démonstration).
+            date_debut = Presence.objects.order_by('date').values_list('date', flat=True).first() or today
         else:
             date_debut = today
             
@@ -897,7 +901,9 @@ def rapports_view(request):
             date_fin = today
 
     # 2. Requête de base
-    presences = Presence.objects.select_related('etudiant', 'annee', 'groupe').order_by('-date', '-heure')
+    presences = Presence.objects.select_related(
+        'etudiant', 'annee__filiere', 'groupe', 'matiere'
+    ).order_by('-date', '-heure')
 
     # 3. Application des filtres
     presences = presences.filter(date__range=[date_debut, date_fin])
@@ -912,12 +918,13 @@ def rapports_view(request):
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
         writer = csv.writer(response)
-        writer.writerow(['Date', 'Heure', 'Matricule', 'Nom', 'Prénom', 'Filière/Année', 'Groupe', 'Statut'])
+        writer.writerow(['Date', 'Heure', 'Matricule', 'Nom', 'Prénom', 'Matière', 'Filière/Année', 'Groupe', 'Statut'])
         
         for p in presences:
             writer.writerow([
                 p.date, p.heure, p.etudiant.matricule, 
                 p.etudiant.nom, p.etudiant.prenom, 
+                p.matiere.nom if p.matiere else '',
                 f"{p.annee.filiere.nom} A{p.annee.numero}",
                 p.groupe.nom if p.groupe else '',
                 p.get_statut_display()
@@ -943,7 +950,7 @@ def rapports_view(request):
         elements.append(Spacer(1, 20))
 
         # Préparation des données du tableau
-        data = [['Date', 'Heure', 'Matricule', 'Nom Prénom', 'Filière/Année', 'Groupe', 'Statut']]
+        data = [['Date', 'Heure', 'Matricule', 'Nom Prénom', 'Matière', 'Filière/Année', 'Groupe', 'Statut']]
         
         # Style de base du tableau
         table_style = [
@@ -961,6 +968,7 @@ def rapports_view(request):
                 p.heure.strftime("%H:%M"),
                 p.etudiant.matricule,
                 f"{p.etudiant.nom} {p.etudiant.prenom}",
+                p.matiere.nom if p.matiere else '',
                 f"{p.annee.filiere.nom} A{p.annee.numero}",
                 (p.groupe.nom if p.groupe else ''),
                 p.get_statut_display()
