@@ -27,27 +27,51 @@
     <div class="glass-panel mb-4 p-4">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h5 class="m-0 text-info small fw-bold"><i class="fas fa-filter me-2"></i>FILTRES AVANCÉS & EXPORTS</h5>
-            {% if filters.date_debut or filters.groupe_id %}
+            {% if filters.date_debut or filters.groupe_id or filters.filiere_id or filters.matiere_id %}
                 <a href="{% url 'attendance:rapports' %}" class="text-danger small decoration-none fw-bold"><i class="fas fa-times-circle"></i> Réinitialiser</a>
             {% endif %}
         </div>
         
-        <form method="get" class="row g-3">
+        <form method="get" class="report-filter-grid">
             {% if filters.type %}
                 <input type="hidden" name="type" value="{{ filters.type }}">
             {% endif %}
             
-            <div class="col-md-3">
+            <div class="report-filter-field">
                 <label class="form-label text-light small opacity-75">Date de début</label>
                 <input type="date" name="date_debut" class="form-control glass-input" value="{{ filters.date_debut }}">
             </div>
             
-            <div class="col-md-3">
+            <div class="report-filter-field">
                 <label class="form-label text-light small opacity-75">Date de fin</label>
                 <input type="date" name="date_fin" class="form-control glass-input" value="{{ filters.date_fin }}">
             </div>
             
-            <div class="col-md-3">
+            <div class="report-filter-field">
+                <label class="form-label text-light small opacity-75">Filière</label>
+                <select name="filiere" class="form-select glass-select">
+                    <option value="">Toutes les filières</option>
+                    {% for filiere in filieres %}
+                        <option value="{{ filiere.id }}" {% if filters.filiere_id == filiere.id|stringformat:'s' %}selected{% endif %}>
+                            {{ filiere.nom }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="report-filter-field">
+                <label class="form-label text-light small opacity-75">Matière</label>
+                <select name="matiere" class="form-select glass-select">
+                    <option value="">Toutes les matières</option>
+                    {% for matiere in matieres %}
+                        <option value="{{ matiere.id }}" {% if filters.matiere_id == matiere.id|stringformat:'s' %}selected{% endif %}>
+                            {{ matiere.nom }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="report-filter-field">
                 <label class="form-label text-light small opacity-75">Groupe</label>
                 <select name="groupe" class="form-select glass-select">
                     <option value="">Tous les groupes</option>
@@ -59,7 +83,7 @@
                 </select>
             </div>
             
-            <div class="col-md-3 d-flex align-items-end">
+            <div class="report-filter-actions">
                 <div class="btn-group w-100 shadow-sm">
                     <button type="submit" class="btn btn-neon flex-grow-1">
                         <i class="fas fa-search me-1"></i> Filtrer
@@ -160,6 +184,28 @@
 </div>
 
 <style>
+    .report-filter-grid {
+        display: grid;
+        grid-template-columns: minmax(165px, 1.1fr) minmax(165px, 1.1fr) minmax(170px, 1.2fr) minmax(170px, 1.2fr) minmax(150px, 1fr) minmax(250px, 1.6fr);
+        gap: 12px;
+        align-items: end;
+    }
+    .report-filter-field { min-width: 0; }
+    .report-filter-field .form-label { display: block; }
+    .report-filter-actions { min-width: 0; }
+    .report-filter-actions .btn-group { display: flex; }
+    .report-filter-actions .btn-group .btn:first-child { flex: 1 1 auto; white-space: nowrap; }
+
+    @media (max-width: 1199.98px) {
+        .report-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 767.98px) {
+        .report-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 575.98px) {
+        .report-filter-grid { grid-template-columns: 1fr; }
+    }
+
     /* Global Glass Effect */
     .glass-panel {
         background: rgba(255, 255, 255, 0.03) !important;

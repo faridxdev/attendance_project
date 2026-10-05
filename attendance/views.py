@@ -862,6 +862,8 @@ def rapports_view(request):
     type_rapport = request.GET.get('type')
     date_debut_str = request.GET.get('date_debut')
     date_fin_str = request.GET.get('date_fin')
+    filiere_id = request.GET.get('filiere')
+    matiere_id = request.GET.get('matiere')
     groupe_id = request.GET.get('groupe')
     export_format = request.GET.get('export')
 
@@ -910,6 +912,10 @@ def rapports_view(request):
 
     if groupe_id:
         presences = presences.filter(groupe_id=groupe_id)
+    if filiere_id:
+        presences = presences.filter(annee__filiere_id=filiere_id)
+    if matiere_id:
+        presences = presences.filter(matiere_id=matiere_id)
 
     # 4. Gestion de l'export CSV
     if export_format == 'csv':
@@ -947,6 +953,14 @@ def rapports_view(request):
         titre = f"Rapport de Présence - {type_rapport.capitalize() if type_rapport else 'Personnalisé'}"
         elements.append(Paragraph(titre, styles['Title']))
         elements.append(Paragraph(f"Période : {date_debut.strftime('%d/%m/%Y')} au {date_fin.strftime('%d/%m/%Y')}", styles['Normal']))
+        if filiere_id:
+            filiere_label = Filiere.objects.filter(pk=filiere_id).values_list('nom', flat=True).first()
+            if filiere_label:
+                elements.append(Paragraph(f"Filière : {filiere_label}", styles['Normal']))
+        if matiere_id:
+            matiere_label = Matiere.objects.filter(pk=matiere_id).values_list('nom', flat=True).first()
+            if matiere_label:
+                elements.append(Paragraph(f"Matière : {matiere_label}", styles['Normal']))
         elements.append(Spacer(1, 20))
 
         # Préparation des données du tableau
@@ -977,11 +991,11 @@ def rapports_view(request):
             # Couleurs conditionnelles pour le statut
             row_idx = i + 1
             if p.statut == 'présent':
-                table_style.append(('TEXTCOLOR', (5, row_idx), (5, row_idx), colors.green))
+                table_style.append(('TEXTCOLOR', (7, row_idx), (7, row_idx), colors.green))
             elif p.statut == 'absent':
-                table_style.append(('TEXTCOLOR', (5, row_idx), (5, row_idx), colors.red))
+                table_style.append(('TEXTCOLOR', (7, row_idx), (7, row_idx), colors.red))
             else:
-                table_style.append(('TEXTCOLOR', (5, row_idx), (5, row_idx), colors.orange))
+                table_style.append(('TEXTCOLOR', (7, row_idx), (7, row_idx), colors.orange))
 
         # Création et application du style
         table = Table(data)
@@ -1004,11 +1018,15 @@ def rapports_view(request):
     absents = presences.filter(statut='absent').count()
     taux = round((presents / total * 100), 1) if total > 0 else 0
 
-    groupes = Groupe.objects.all()
+    groupes = Groupe.objects.all().order_by('nom')
+    filieres = Filiere.objects.all().order_by('nom')
+    matieres = Matiere.objects.all().order_by('nom')
     
     context = {
         'presences': presences,
         'groupes': groupes,
+        'filieres': filieres,
+        'matieres': matieres,
         'stats': {
             'total': total,
             'presents': presents,
@@ -1018,6 +1036,8 @@ def rapports_view(request):
         'filters': {
             'date_debut': date_debut.strftime('%Y-%m-%d'),
             'date_fin': date_fin.strftime('%Y-%m-%d'),
+            'filiere_id': filiere_id or '',
+            'matiere_id': matiere_id or '',
             'groupe_id': int(groupe_id) if groupe_id else '',
             'type': type_rapport
         }
