@@ -5,7 +5,7 @@ from django.utils import timezone
 class Utilisateur(AbstractUser):
     """Utilisateur du système (Instructeur, Responsable Filière, Administrateur)"""
     ROLE_CHOICES = [
-        ('instructeur', 'Instructeur'),  # Ancien: Surveillant
+        ('instructeur', 'Enseignant'),  # Ancien: Surveillant
         ('responsable_filiere', 'Responsable de Filière'),  # Ancien: Proviseur
         ('administrateur', 'Administrateur'),
     ]

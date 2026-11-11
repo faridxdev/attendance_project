@@ -249,16 +249,19 @@ async function refreshActivityLog() {
         if (!response.ok) return;
         const data = await response.json();
         activityLogBody.innerHTML = data.presences.length
-            ? data.presences.map(presence => `
+            ? data.presences.map(presence => {
+                const isPresent = presence.statut === 'présent' || presence.statut === 'present';
+                return `
                 <tr>
                     <td>${presence.matricule}</td>
                     <td>${presence.etudiant}</td>
                     <td>${presence.matiere}</td>
                     <td>${presence.filiere}</td>
                     <td>${presence.heure}</td>
-                    <td><span class="badge-glow badge-success">${presence.statut.toUpperCase()}</span></td>
+                    <td><span class="badge-glow ${isPresent ? 'badge-success' : 'badge-danger'}">${presence.statut.toUpperCase()}</span></td>
                 </tr>
-            `).join('')
+            `;
+            }).join('')
             : '<tr><td colspan="6" class="text-center py-3">Aucune donnée détectée.</td></tr>';
         presentsCount.textContent = data.presents_count;
     } catch (error) {
@@ -373,10 +376,14 @@ async function togglePointage(action) {
     const matiereId = matiereSelect.value;
     const url = action === 'start' ? "{% url 'attendance:start_pointage' %}" : "{% url 'attendance:stop_pointage' %}";
 
+    if (action === 'stop' && !window.confirm(
+        'Arrêter le pointage enregistrera absents les étudiants non pointés pour cette séance. Continuer ?'
+    )) return;
+
     const response = await fetch(url, { 
         method: 'POST',
         headers: {'X-CSRFToken': csrftoken, 'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `matiere_id=${matiereId}`
+        body: `matiere_id=${encodeURIComponent(matiereId)}`
     });
     
     if (response.ok) {
@@ -402,13 +409,18 @@ async function togglePointage(action) {
                 stopBtn.disabled = true;
                 await fetch("{% url 'attendance:stop_pointage' %}", {
                     method: 'POST',
-                    headers: {'X-CSRFToken': csrftoken}
+                    headers: {'X-CSRFToken': csrftoken, 'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'cancel=true'
                 });
             }
         } else {
             if (activityRefreshTimer) window.clearInterval(activityRefreshTimer);
             activityRefreshTimer = null;
             stopBrowserCamera();
+            await refreshActivityLog();
+            if (data.absences_created) {
+                statusMsg.innerHTML = `ÉTAT DU SYSTÈME : <span class="text-warning fw-bold">VEILLE — ${data.absences_created} ABSENCE(S) ENREGISTRÉE(S)</span>`;
+            }
             overlay.textContent = 'En attente...';
             overlay.classList.remove('d-none');
         }
@@ -442,7 +454,8 @@ photoCaptureInput.onchange = async () => {
 
     const response = await fetch("{% url 'attendance:mobile_pointage' %}", {
         method: 'POST',
-        headers: {'X-CSRFToken': csrftoken},
+        headers: {'X-CSRFToken': csrftoken, 'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'cancel=true',
         body: formData
     });
 

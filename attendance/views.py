@@ -7,6 +7,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from django.contrib.sessions.models import Session
 from django.conf import settings
+from django.db import transaction
 import csv
 import os
 import cv2
@@ -172,9 +173,11 @@ def mobile_pointage_capture(request):
         if not matiere_id or not photo_data:
             return JsonResponse({'error': 'Matière ou photo manquante.'}, status=400)
 
-        try:
-            Matiere.objects.get(id=matiere_id)
-        except Matiere.DoesNotExist:
+        if not Matiere.objects.filter(
+            id=matiere_id,
+            instructeur=request.user,
+            actif=True,
+        ).exists():
             return JsonResponse({'error': 'Matière invalide.'}, status=400)
 
         image_bytes = photo_data.read()
@@ -287,17 +290,27 @@ def dashboard_responsable(request):
         return redirect('attendance:dashboard')
     
     today = timezone.now().date()
-    if hasattr(request.user, 'filiere') and request.user.filiere:
-        total_etudiants = Etudiant.objects.filter(filiere=request.user.filiere).count()
-    else:
-        total_etudiants = Etudiant.objects.count()
-    presents_today = Presence.objects.filter(date=today, statut='présent').count()
-    taux_presence = round((presents_today / total_etudiants * 100), 1) if total_etudiants > 0 else 0
+    filieres = request.user.filieres.all()
+    total_etudiants = Etudiant.objects.filter(
+        filiere__in=filieres,
+        actif=True,
+    ).count()
+    presences_today = Presence.objects.filter(
+        date=today,
+        annee__filiere__in=filieres,
+    )
+    presents_today = presences_today.filter(statut='présent').values(
+        'etudiant_id'
+    ).distinct().count()
+    total_pointages = presences_today.count()
+    total_presents = presences_today.filter(statut='présent').count()
+    taux_presence = round((total_presents / total_pointages * 100), 1) if total_pointages > 0 else 0
     
     # Absences récentes (7 derniers jours)
     absences = Presence.objects.filter(
         statut='absent',
-        date__gte=today - timedelta(days=7)
+        date__gte=today - timedelta(days=7),
+        annee__filiere__in=filieres,
     ).select_related('etudiant').order_by('-date')
     
     return render(request, 'attendance/dashboard_responsable.html', {
@@ -766,11 +779,44 @@ def video_feed(request):
 def start_pointage(request):
     if request.method == 'POST' and request.user.role == 'instructeur':
         global pointage_actif, pointage_matiere_id
+        matiere_id = request.POST.get('matiere_id')
+        if not matiere_id or not Matiere.objects.filter(
+            pk=matiere_id,
+            instructeur=request.user,
+            actif=True,
+        ).exists():
+            return JsonResponse({'status': 'error', 'error': 'Matière invalide.'}, status=400)
         with pointage_lock:
             pointage_actif = True
-            pointage_matiere_id = request.POST.get('matiere_id') or None
+            pointage_matiere_id = matiere_id
         return JsonResponse({'status': 'started'})
     return JsonResponse({'status': 'error'}, status=400)
+
+
+def _finalize_pointage(matiere, today):
+    etudiants = Etudiant.objects.filter(annee=matiere.annee, actif=True)
+    if matiere.groupe_id:
+        etudiants = etudiants.filter(groupe_id=matiere.groupe_id)
+
+    deja_pointes = Presence.objects.filter(
+        matiere=matiere,
+        date=today,
+        etudiant__isnull=False,
+    ).values_list('etudiant_id', flat=True)
+    absences = [
+        Presence(
+            etudiant=etudiant,
+            annee=etudiant.annee,
+            groupe=etudiant.groupe,
+            matiere=matiere,
+            date=today,
+            statut='absent',
+        )
+        for etudiant in etudiants.exclude(pk__in=deja_pointes)
+    ]
+    with transaction.atomic():
+        Presence.objects.bulk_create(absences, ignore_conflicts=True)
+    return len(absences)
 
 
 @login_required
@@ -778,9 +824,27 @@ def stop_pointage(request):
     if request.method == 'POST' and request.user.role == 'instructeur':
         global pointage_actif, pointage_matiere_id
         with pointage_lock:
+            if not pointage_actif or not pointage_matiere_id:
+                return JsonResponse({'status': 'stopped', 'absences_created': 0})
+
+            matiere_id = pointage_matiere_id
+            matiere = Matiere.objects.filter(
+                pk=matiere_id,
+                instructeur=request.user,
+            ).first()
+            if matiere is None:
+                return JsonResponse({'status': 'error', 'error': 'Matière invalide.'}, status=403)
+
             pointage_actif = False
             pointage_matiere_id = None
-        return JsonResponse({'status': 'stopped'})
+
+        absences_created = 0
+        if request.POST.get('cancel') != 'true':
+            absences_created = _finalize_pointage(matiere, timezone.now().date())
+        return JsonResponse({
+            'status': 'stopped',
+            'absences_created': absences_created,
+        })
     return JsonResponse({'status': 'error'}, status=400)
 
 
@@ -907,6 +971,11 @@ def rapports_view(request):
         'etudiant', 'annee__filiere', 'groupe', 'matiere'
     ).order_by('-date', '-heure')
 
+    if request.user.role == 'responsable_filiere':
+        presences = presences.filter(
+            annee__filiere__in=request.user.filieres.all()
+        )
+
     # 3. Application des filtres
     presences = presences.filter(date__range=[date_debut, date_fin])
 
@@ -1018,9 +1087,14 @@ def rapports_view(request):
     absents = presences.filter(statut='absent').count()
     taux = round((presents / total * 100), 1) if total > 0 else 0
 
-    groupes = Groupe.objects.all().order_by('nom')
     filieres = Filiere.objects.all().order_by('nom')
+    groupes = Groupe.objects.all().order_by('nom')
     matieres = Matiere.objects.all().order_by('nom')
+    if request.user.role == 'responsable_filiere':
+        filiere_ids = request.user.filieres.values('pk')
+        filieres = filieres.filter(pk__in=filiere_ids)
+        groupes = groupes.filter(annee__filiere__in=request.user.filieres.all())
+        matieres = matieres.filter(annee__filiere__in=request.user.filieres.all())
     
     context = {
         'presences': presences,

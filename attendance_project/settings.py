@@ -158,6 +158,7 @@ JAZZMIN_SETTINGS = {
     # Top Menu #
     ############
     "topmenu_links": [
+        {"name": "Dashboard principal", "url": "attendance:dashboard_admin", "icon": "fas fa-home"},
         {"name": "Home", "url": "admin:index", "permissions": ["auth.view_user"]},
         {"name": "Support", "url": "https://github.com/farridav/django-jazzmin", "new_window": True},
         {"model": "core.Utilisateur"},

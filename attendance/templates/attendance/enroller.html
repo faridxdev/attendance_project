@@ -45,7 +45,17 @@ Enrolement d'un etudiant
         <a href="{% url 'attendance:dashboard' %}" class="btn btn-neon-red btn-sm">Annuler</a>
     </div>
 
-    <div class="glass-panel p-4">
+    <div id="enrollmentSuccess" class="alert alert-success d-none align-items-center justify-content-between gap-3 mb-4" role="status">
+        <div>
+            <strong><i class="fas fa-check-circle me-2"></i>Enrôlement réussi</strong>
+            <div id="enrollmentSuccessMessage" class="small mt-1"></div>
+        </div>
+        <a href="{% url 'attendance:dashboard_admin' %}" class="btn btn-success btn-sm text-nowrap">
+            <i class="fas fa-arrow-left me-1"></i>Retour au dashboard admin
+        </a>
+    </div>
+
+    <div id="enrollmentPanel" class="glass-panel p-4">
 
         <form id="enrolForm" method="POST">
             {% csrf_token %}
@@ -152,7 +162,7 @@ Enrolement d'un etudiant
 
             </div>
 
-            <button type="submit" class="btn btn-neon-purple w-100 py-3 fw-bold mt-4">
+            <button type="submit" id="submitEnrollmentBtn" class="btn btn-neon-purple w-100 py-3 fw-bold mt-4">
                 VALIDER L'ENREGISTREMENT
             </button>
 
@@ -245,6 +255,7 @@ Enrolement d'un etudiant
 document.addEventListener('DOMContentLoaded', () => {
 
     const video = document.getElementById('video');
+    let cameraStream = null;
     const canvas = document.getElementById('canvas');
     const captureBtn = document.getElementById('captureBtn');
     const retryBtn = document.getElementById('retryBtn');
@@ -325,7 +336,10 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     navigator.mediaDevices.getUserMedia(constraints)
-        .then(stream => video.srcObject = stream)
+        .then(stream => {
+            cameraStream = stream;
+            video.srcObject = stream;
+        })
         .catch(err => {
             console.error("Erreur camera : ", err);
             // Si la caméra échoue (ex: pas de HTTPS), on montre le champ de fichier
@@ -598,20 +612,32 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
-        const response = await fetch("{% url 'attendance:capture' %}", {
-            method: 'POST',
-            headers: {
-                'X-CSRFToken': csrftoken
-            },
-            body: formData
-        });
+        const submitBtn = document.getElementById('submitEnrollmentBtn');
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>TRAITEMENT EN COURS...';
 
-        const data = await response.json();
-        if (data.success) {
-            alert(data.message);
-            window.location.reload(); // Recharge la page pour vider le formulaire et la photo
-        } else {
-            alert(data.error);
+        try {
+            const response = await fetch("{% url 'attendance:capture' %}", {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': csrftoken
+                },
+                body: formData
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                document.getElementById('enrollmentSuccessMessage').textContent = data.message;
+                document.getElementById('enrollmentSuccess').classList.remove('d-none');
+                document.getElementById('enrollmentSuccess').classList.add('d-flex');
+                document.getElementById('enrollmentPanel').classList.add('d-none');
+                if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+            } else {
+                alert(data.error);
+            }
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = "VALIDER L'ENREGISTREMENT";
         }
     };
 

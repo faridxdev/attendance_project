@@ -126,8 +126,15 @@ def process_frame(frame: np.ndarray, matiere_id=None) -> tuple:
         if target_embedding is None:
             return 'aucun_visage', None, None, None
 
+        matiere = None
+        if matiere_id:
+            try:
+                matiere = Matiere.objects.get(id=matiere_id)
+            except Matiere.DoesNotExist:
+                return 'erreur', None, None, None
+
         # 2. Comparaison avec les embeddings chiffrés en base de données
-        etudiants = Etudiant.objects.filter(actif=True).exclude(embedding__isnull=True)
+        etudiants = _students_for_matiere(matiere)
         best_match = None
         min_dist = COSINE_THRESHOLD  # Seuil de tolérance ArcFace calibré
 
@@ -147,31 +154,18 @@ def process_frame(frame: np.ndarray, matiere_id=None) -> tuple:
                 etudiant = best_match
                 # Marquer présence (1 par jour max)
                 today = timezone.now().date()
-                matiere = None
-                if matiere_id:
-                    try:
-                        matiere = Matiere.objects.get(id=matiere_id)
-                    except Matiere.DoesNotExist:
-                        pass
-                
-                # Une seule présence par étudiant et par jour, même si le
-                # flux reconnaît le visage sur plusieurs images successives.
-                presence = Presence.objects.filter(
+                Presence.objects.update_or_create(
                     etudiant=etudiant,
                     matiere=matiere,
                     date=today,
-                ).first()
-                if presence is None:
-                    Presence.objects.create(
-                        etudiant=etudiant,
-                        annee=etudiant.annee,
-                        groupe=etudiant.groupe,
-                        matiere=matiere,
-                        date=today,
-                        statut='présent',
-                        heure=timezone.now().time(),
-                        reconnu_par=None,
-                    )
+                    defaults={
+                        'annee': etudiant.annee,
+                        'groupe': etudiant.groupe,
+                        'statut': 'présent',
+                        'heure': timezone.now().time(),
+                        'reconnu_par': None,
+                    },
+                )
                 return 'présent', etudiant.nom, etudiant.prenom, etudiant.matricule
             except Exception as e:
                 print(f"Erreur enregistrement presence: {e}")
@@ -210,6 +204,17 @@ def _assign_faces_to_students(face_embeddings, etudiants):
     return assignments
 
 
+def _students_for_matiere(matiere):
+    etudiants = Etudiant.objects.filter(
+        actif=True,
+    ).exclude(embedding__isnull=True)
+    if matiere:
+        etudiants = etudiants.filter(annee_id=matiere.annee_id)
+        if matiere.groupe_id:
+            etudiants = etudiants.filter(groupe_id=matiere.groupe_id)
+    return etudiants
+
+
 def process_frame_many(frame: np.ndarray, matiere_id=None) -> list[dict]:
     """Détecte et reconnaît chaque visage présent dans une image de salle."""
     if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
@@ -241,17 +246,16 @@ def process_frame_many(frame: np.ndarray, matiere_id=None) -> list[dict]:
     if not face_embeddings:
         return []
 
-    etudiants = list(
-        Etudiant.objects.filter(actif=True).exclude(embedding__isnull=True)
-    )
-    assignments = _assign_faces_to_students(face_embeddings, etudiants)
-    today = timezone.now().date()
     matiere = None
     if matiere_id:
         try:
             matiere = Matiere.objects.get(id=matiere_id)
         except Matiere.DoesNotExist:
-            pass
+            return []
+
+    etudiants = list(_students_for_matiere(matiere))
+    assignments = _assign_faces_to_students(face_embeddings, etudiants)
+    today = timezone.now().date()
 
     recognitions = []
     for face_index, face in enumerate(valid_faces):
@@ -267,7 +271,7 @@ def process_frame_many(frame: np.ndarray, matiere_id=None) -> list[dict]:
             })
             continue
 
-        _presence, created = Presence.objects.get_or_create(
+        _presence, created = Presence.objects.update_or_create(
             etudiant=etudiant,
             matiere=matiere,
             date=today,
@@ -323,6 +327,14 @@ def generate_embedding_from_files(image_paths):
     embeddings = []
     for path in image_paths:
         validate_enrollment_image(path)
+        frame = cv2.imread(path)
+        if frame is not None:
+            h, w = frame.shape[:2]
+            max_side = 720
+            if max(w, h) > max_side:
+                scale = max_side / max(w, h)
+                frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+                cv2.imwrite(path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
         # Chaque vue est extraite d'une image fixe issue du flux vidéo. Le
         # liveness est déjà validé par le scan continu côté navigateur ; le
         # modèle anti-spoofing image-par-image classerait souvent ces JPEG
